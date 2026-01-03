@@ -24,7 +24,6 @@ SUCCESS_COUNT=0
 FAIL_COUNT=0
 
 # Default values
-AUTO_LOGIN_USER=""
 CPU_GOVERNOR="powersave"
 ENABLE_WIFI=false
 ENABLE_BLUETOOTH=false
@@ -96,7 +95,6 @@ usage() {
 Usage: sudo $0 [OPTIONS]
 
 Options:
-    -u, --auto-login-user USER      Set auto-login user (e.g., 'kali')
     -g, --cpu-governor GOVERNOR     Set CPU governor (default: 'powersave')
                                     Options: powersave, performance, ondemand, conservative, schedutil
     -w, --enable-wifi               Enable WiFi interface
@@ -116,9 +114,9 @@ Options:
     -h, --help                      Display this help message
 
 Examples:
-    sudo $0 -u kali -g performance
-    sudo $0 --auto-login-user kali --cpu-governor powersave --enable-wifi --enable-bluetooth
-    sudo $0 -u kali -f
+    sudo $0 -g performance
+    sudo $0 --cpu-governor powersave --enable-wifi --enable-bluetooth
+    sudo $0 -f
 EOF
 }
 
@@ -126,10 +124,6 @@ EOF
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -u|--auto-login-user)
-                AUTO_LOGIN_USER="$2"
-                shift 2
-                ;;
             -g|--cpu-governor)
                 CPU_GOVERNOR="$2"
                 shift 2
@@ -209,11 +203,6 @@ parse_arguments() {
 
 # Validate parameters
 validate_parameters() {
-    if [[ -n "$AUTO_LOGIN_USER" && ! "$AUTO_LOGIN_USER" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-        print_error "Invalid username format: $AUTO_LOGIN_USER"
-        exit 1
-    fi
-
     case "$CPU_GOVERNOR" in
         powersave|performance|ondemand|conservative|schedutil)
             ;;
@@ -228,7 +217,6 @@ validate_parameters() {
 # Display configuration
 display_config() {
     print_status "Configuration:"
-    echo "  Auto-login User: ${AUTO_LOGIN_USER:-'(none)'}"
     echo "  CPU Governor: $CPU_GOVERNOR"
     echo "  WiFi Enabled: $ENABLE_WIFI"
     echo "  Bluetooth Enabled: $ENABLE_BLUETOOTH"
@@ -245,31 +233,6 @@ display_config() {
     echo "  Brave Install: $ENABLE_BRAVE"
     echo "  Antigravity Install: $ENABLE_ANTIGRAVITY"
     echo "  Cloud Cleanup: $ENABLE_CLOUD_CLEANUP"
-}
-
-# Configure auto-login user
-configure_auto_login() {
-    if [[ -z "$AUTO_LOGIN_USER" ]]; then
-        print_status "No auto-login user specified (auto-login disabled)"
-        return 0
-    fi
-
-    print_status "Configuring auto-login for user: $AUTO_LOGIN_USER"
-    
-    # Verify user exists
-    if ! id "$AUTO_LOGIN_USER" &>/dev/null; then
-        print_error "User '$AUTO_LOGIN_USER' does not exist"
-        return 1
-    fi
-
-    # Example: Configure LightDM for auto-login (adjust for your display manager)
-    # Uncomment and modify based on your system's display manager
-    # sed -i "s/#autologin-user=/autologin-user=$AUTO_LOGIN_USER/" /etc/lightdm/lightdm.conf
-    
-    print_status "✓ Auto-login configured for user: $AUTO_LOGIN_USER"
-    print_warning "Please verify auto-login works correctly after reboot. If issues occur, you can use Ctrl+Alt+F5 to access a TTY login."
-    track_success
-    return 0
 }
 
 # Configure CPU governor
@@ -295,9 +258,53 @@ configure_cpu_governor() {
     if [[ -f "$service_file" ]]; then
         print_status "cpufreq-tune service already exists"
         
-        # Check if service is enabled
+        # Extract current governor from the service file
+        local current_governor
+        current_governor=$(grep -oP 'frequency-set -g \K\S+' "$service_file" | head -1)
+        
+        if [[ "$current_governor" == "$CPU_GOVERNOR" ]]; then
+            print_status "Service already configured with governor: $current_governor"
+            # Check if service is enabled
+            if systemctl is-enabled cpufreq-tune.service &>/dev/null; then
+                print_status "cpufreq-tune service already enabled"
+                track_skip "CPU governor"
+                return 0
+            fi
+        else
+            # Governor differs, update the service
+            print_status "Governor mismatch: service has '$current_governor', updating to '$CPU_GOVERNOR'..."
+            if tee "$service_file" >/dev/null <<EOF
+[Unit]
+Description=Custom CPU frequency scaling with $CPU_GOVERNOR
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/cpupower frequency-set -g $CPU_GOVERNOR
+
+[Install]
+WantedBy=multi-user.target
+EOF
+            then
+                systemctl daemon-reload
+                if systemctl enable --now cpufreq-tune.service 2>/dev/null; then
+                    print_status "CPU governor updated and service restarted"
+                    track_success
+                    return 0
+                else
+                    print_warning "Failed to restart cpufreq-tune.service"
+                    track_failure "CPU governor service"
+                    return 1
+                fi
+            else
+                print_error "Failed to update cpufreq-tune service file"
+                track_failure "CPU governor"
+                return 1
+            fi
+        fi
+        
+        # Check if service is enabled (for unchanged governor case)
         if systemctl is-enabled cpufreq-tune.service &>/dev/null; then
-            print_status "cpufreq-tune service already enabled"
             track_skip "CPU governor"
             return 0
         else
@@ -1176,7 +1183,6 @@ main() {
     # Execute configuration tasks (continue even if some fail)
     configure_raspi_config || true
     configure_eeprom || true
-    configure_auto_login || true
     configure_cpu_governor || true
     configure_nvme_power || true
     configure_fstab || true
