@@ -371,6 +371,34 @@ command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-com
 user = "_greetd"
 EOF
 
+### Systemd override to reduce kernel/boot logging in the greeter
+
+Some kernel and boot log messages can appear on the greeter TTY and spam the tuigreet UI. Create a systemd override so these messages are sent to the journal instead and do not clutter the greeter screen. If the override file already exists it will be treated as the active override (no further action required).
+
+Run:
+
+```bash
+sudo mkdir -p /etc/systemd/system/greetd.service.d
+sudo tee /etc/systemd/system/greetd.service.d/override.conf >/dev/null <<'EOF'
+[Service]
+Type=idle
+StandardOutput=tty
+# Without this errors will spam on screen
+StandardError=journal
+# Without these bootlogs will spam on screen
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart greetd
+```
+
+## Optional - KDE Installation
+
+KDE with wayland has better out-of-the-box touchcreen and gestures compared to xfce. 
+
+```
 sudo apt update
 sudo apt install -y kali-desktop-kde qt6-wayland xdg-desktop-portal xdg-desktop-portal-kde plasma-desktop plasma-workspace plasma-framework powerdevil upower qt6-base-bin qml6-module-qtnetwork qml6-module-org-kde-notifications
 ```
@@ -378,6 +406,7 @@ sudo apt install -y kali-desktop-kde qt6-wayland xdg-desktop-portal xdg-desktop-
 **Remove XFCE (optional):**
 ```bash
 # Caution: This removes XFCE. Make sure you're happy with KDE first!
+# Note sddm/lightdm fails to render on the built-in screen if v3d is enabled
 sudo apt purge --autoremove --allow-remove-essential kali-desktop-xfce
 ```
 
@@ -442,3 +471,4 @@ sudo apt install brave-browser
 - [RPi-Distro/raspi-config](https://github.com/RPi-Distro/raspi-config) - Official Raspberry Pi configuration tool
 - [RPi-Distro/rpi-eeprom](https://github.com/raspberrypi/rpi-eeprom) - Raspberry Pi firmware tools
 - [Inspirations from hackberrycm5 optimizations](https://github.com/quasialex/hackberrycm5)
+- [Kali - Switch Destop Environment](https://www.kali.org/docs/general-use/switching-desktop-environments/)

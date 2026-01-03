@@ -19,6 +19,7 @@ readonly NC='\033[0m' # No Color
 # Tracking variables
 FAILED_OPERATIONS=()
 SKIPPED_OPERATIONS=()
+SKIPPED_BY_FLAG=()
 SUCCESS_COUNT=0
 FAIL_COUNT=0
 
@@ -37,6 +38,8 @@ ENABLE_NETWORKING_OPTIMIZATION=true
 ENABLE_XORG_CONFIG=true
 ENABLE_DEVICE_TREE=false
 VERBOSE=false
+ENABLE_BRAVE=false
+ENABLE_ANTIGRAVITY=false
 
 ################################################################################
 # Functions
@@ -71,6 +74,11 @@ track_skip() {
     SKIPPED_OPERATIONS+=("$operation")
 }
 
+track_skip_flag() {
+    local operation="$1"
+    SKIPPED_BY_FLAG+=("$operation")
+}
+
 # Check if script is running as root
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -102,6 +110,8 @@ Options:
     -x, --disable-xorg-config       Skip Xorg configuration
     -t, --enable-device-tree        Setup HackBerry device tree (conditional)
     -v, --verbose                   Enable verbose output
+    --install-brave                Install Brave browser
+    --install-antigravity          Install Antigravity package and repository
     -h, --help                      Display this help message
 
 Examples:
@@ -167,6 +177,14 @@ parse_arguments() {
                 ENABLE_DEVICE_TREE=true
                 shift
                 ;;
+            --install-brave)
+                ENABLE_BRAVE=true
+                shift
+                ;;
+            --install-antigravity)
+                ENABLE_ANTIGRAVITY=true
+                shift
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -219,6 +237,8 @@ display_config() {
     echo "  Xorg Config: $ENABLE_XORG_CONFIG"
     echo "  Device Tree: $ENABLE_DEVICE_TREE"
     echo "  Verbose Mode: $VERBOSE"
+    echo "  Brave Install: $ENABLE_BRAVE"
+    echo "  Antigravity Install: $ENABLE_ANTIGRAVITY"
 }
 
 # Configure auto-login user
@@ -250,7 +270,7 @@ configure_auto_login() {
 configure_cpu_governor() {
     if ! $ENABLE_POWER_MANAGEMENT; then
         print_warning "Power management disabled, skipping CPU governor configuration"
-        track_skip "CPU governor"
+        track_skip_flag "CPU governor"
         return 0
     fi
 
@@ -374,8 +394,17 @@ print_summary() {
         echo -e "${GREEN}✓ Successful configurations: $SUCCESS_COUNT${NC}"
     fi
     
+    # Skipped by feature flags
+    if [[ ${#SKIPPED_BY_FLAG[@]} -gt 0 ]]; then
+        echo -e "${YELLOW}⊘ Skipped (by flag): ${#SKIPPED_BY_FLAG[@]}${NC}"
+        for op in "${SKIPPED_BY_FLAG[@]}"; do
+            echo "  - $op"
+        done
+    fi
+
+    # Other skips (already present / non-actionable)
     if [[ ${#SKIPPED_OPERATIONS[@]} -gt 0 ]]; then
-        echo -e "${YELLOW}⊘ Skipped (disabled): ${#SKIPPED_OPERATIONS[@]}${NC}"
+        echo -e "${YELLOW}⊘ Skipped (other): ${#SKIPPED_OPERATIONS[@]}${NC}"
         for op in "${SKIPPED_OPERATIONS[@]}"; do
             echo "  - $op"
         done
@@ -399,7 +428,7 @@ print_summary() {
 configure_nvme_power() {
     if ! $ENABLE_POWER_MANAGEMENT; then
         print_warning "Power management disabled, skipping NVMe power configuration"
-        track_skip "NVMe power"
+        track_skip_flag "NVMe power"
         return 0
     fi
 
@@ -449,7 +478,7 @@ EOF
 configure_fstab() {
     if ! $ENABLE_FSTAB_OPTIMIZATION; then
         print_warning "Fstab optimization disabled"
-        track_skip "fstab"
+        track_skip_flag "fstab"
         return 0
     fi
 
@@ -522,7 +551,7 @@ configure_fstab() {
 configure_services() {
     if ! $ENABLE_SERVICE_OPTIMIZATION; then
         print_warning "Service optimization disabled"
-        track_skip "service optimization"
+        track_skip_flag "service optimization"
         return 0
     fi
 
@@ -565,7 +594,7 @@ configure_services() {
 configure_raspi_config() {
     if ! $ENABLE_RASPI_CONFIG; then
         print_warning "Raspi-config installation disabled"
-        track_skip "raspi-config"
+        track_skip_flag "raspi-config"
         return 0
     fi
 
@@ -620,7 +649,7 @@ configure_raspi_config() {
 configure_eeprom() {
     if ! $ENABLE_EEPROM; then
         print_warning "Rpi-eeprom installation disabled"
-        track_skip "rpi-eeprom"
+        track_skip_flag "rpi-eeprom"
         return 0
     fi
 
@@ -688,7 +717,7 @@ configure_eeprom() {
 configure_device_tree() {
     if ! $ENABLE_DEVICE_TREE; then
         print_warning "Device tree setup disabled"
-        track_skip "device tree"
+        track_skip_flag "device tree"
         return 0
     fi
 
@@ -766,7 +795,7 @@ configure_device_tree() {
 configure_networking() {
     if ! $ENABLE_NETWORKING_OPTIMIZATION; then
         print_warning "Network optimization disabled"
-        track_skip "networking"
+        track_skip_flag "networking"
         return 0
     fi
 
@@ -815,7 +844,7 @@ EOF
 configure_xorg() {
     if ! $ENABLE_XORG_CONFIG; then
         print_warning "Xorg configuration disabled"
-        track_skip "Xorg"
+        track_skip_flag "Xorg"
         return 0
     fi
 
@@ -873,7 +902,7 @@ EOF
 configure_greetd() {
     if ! $ENABLE_GREETD; then
         print_warning "Greetd installation disabled"
-        track_skip "greetd"
+        track_skip_flag "greetd"
         return 0
     fi
 
@@ -934,6 +963,33 @@ command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-com
 user = "$greetd_user"
 EOF
     then
+        # Create systemd override to reduce kernel/boot logging in the greeter
+        local override_dir="/etc/systemd/system/greetd.service.d"
+        local override_file="$override_dir/override.conf"
+        if [[ -f "$override_file" ]]; then
+            print_status "greetd systemd override already present: $override_file"
+        else
+            print_status "Creating greetd systemd override to reduce kernel/boot messages in tuigreet..."
+            mkdir -p "$override_dir" || print_warning "Failed to create $override_dir"
+            if tee "$override_file" >/dev/null <<'UNIT'
+[Service]
+Type=idle
+StandardOutput=tty
+# Without this errors will spam on screen
+StandardError=journal
+# Without these bootlogs will spam on screen
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+UNIT
+            then
+                print_status "Created systemd override: $override_file"
+                systemctl daemon-reload 2>/dev/null || print_warning "Failed to reload systemd daemon"
+            else
+                print_warning "Failed to write greetd override file"
+            fi
+        fi
+
         # Enable and start greetd
         if systemctl enable --now greetd 2>/dev/null; then
             print_status "✓ Greetd display manager configured with user: $greetd_user"
@@ -957,6 +1013,80 @@ EOF
     else
         print_error "Failed to write greetd configuration"
         track_failure "greetd"
+        return 1
+    fi
+}
+
+# Install Brave browser
+configure_brave() {
+    if ! $ENABLE_BRAVE; then
+        print_warning "Brave installation disabled"
+        track_skip_flag "brave"
+        return 0
+    fi
+
+    print_status "Installing Brave browser..."
+
+    # Ensure curl is present
+    if ! command -v curl &>/dev/null; then
+        print_status "Installing curl..."
+        apt-get update >/dev/null 2>&1 || true
+        apt-get install -y curl >/dev/null 2>&1 || print_warning "Failed to install curl"
+    fi
+
+    mkdir -p /usr/share/keyrings || true
+    if ! curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg; then
+        print_error "Failed to download Brave keyring"
+        track_failure "brave"
+        return 1
+    fi
+
+    if ! curl -fsSLo /etc/apt/sources.list.d/brave-browser-release.sources https://brave-browser-apt-release.s3.brave.com/brave-browser.sources; then
+        # Fallback to writing a simple deb entry
+        echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" > /etc/apt/sources.list.d/brave-browser-release.list || true
+    fi
+
+    apt-get update >/dev/null 2>&1 || true
+    if apt-get install -y brave-browser >/dev/null 2>&1; then
+        print_status "Brave installed successfully"
+        track_success
+        return 0
+    else
+        print_warning "Failed to install brave-browser from apt repositories"
+        track_failure "brave"
+        return 1
+    fi
+}
+
+# Install Antigravity repository and package
+configure_antigravity() {
+    if ! $ENABLE_ANTIGRAVITY; then
+        print_warning "Antigravity installation disabled"
+        track_skip_flag "antigravity"
+        return 0
+    fi
+
+    print_status "Installing Antigravity repository and package..."
+
+    apt-get update >/dev/null 2>&1 || true
+    mkdir -p /etc/apt/keyrings || true
+
+    if ! curl -fsSL https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg | gpg --dearmor --yes -o /etc/apt/keyrings/antigravity-repo-key.gpg >/dev/null 2>&1; then
+        print_error "Failed to download and install Antigravity repo key"
+        track_failure "antigravity"
+        return 1
+    fi
+
+    echo "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main" | tee /etc/apt/sources.list.d/antigravity.list >/dev/null
+
+    apt-get update >/dev/null 2>&1 || true
+    if apt-get install -y antigravity >/dev/null 2>&1; then
+        print_status "Antigravity installed successfully"
+        track_success
+        return 0
+    else
+        print_warning "Failed to install antigravity"
+        track_failure "antigravity"
         return 1
     fi
 }
@@ -988,6 +1118,8 @@ main() {
     configure_networking || true
     configure_xorg || true
     configure_greetd || true
+    configure_brave || true
+    configure_antigravity || true
     configure_wifi || true
     configure_bluetooth || true
     
