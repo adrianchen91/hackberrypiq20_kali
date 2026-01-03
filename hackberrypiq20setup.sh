@@ -1050,6 +1050,22 @@ UNIT
             fi
         fi
 
+        # Disable other display managers to avoid conflicts, then enable greetd
+        local dm_services=(
+            "lightdm.service"
+            "sddm.service"
+            "gdm.service"
+            "gdm3.service"
+            "lxdm.service"
+            "xdm.service"
+        )
+        for dm in "${dm_services[@]}"; do
+            if systemctl is-enabled "$dm" &>/dev/null || systemctl is-active "$dm" &>/dev/null; then
+                print_status "Disabling conflicting display manager: $dm"
+                systemctl disable --now "$dm" 2>/dev/null || print_warning "Failed to disable $dm or service not present"
+            fi
+        done
+
         # Enable and start greetd
         if systemctl enable --now greetd 2>/dev/null; then
             print_status "✓ Greetd display manager configured with user: $greetd_user"
