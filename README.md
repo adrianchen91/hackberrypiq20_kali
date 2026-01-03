@@ -297,6 +297,7 @@ Modern Linux systems are moving away from traditional networking toward netplan 
 
 **Manual configuration:**
 ## Ensure NetworkManager handles the networking
+```
 sudo tee /etc/netplan/50-cloud-init.yaml >/dev/null <<'EOF'
 network:
   version: 2
@@ -381,6 +382,7 @@ sudo ./hackberrypiq20setup.sh -d
 ```
 
 **Manual setup:**
+```
 sudo apt install -y greetd tuigreet
 
 sudo usermod -aG video _greetd
@@ -409,6 +411,7 @@ command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-com
 # in the `video` group.
 user = "_greetd"
 EOF
+```
 
 ### Systemd override to reduce kernel/boot logging in the greeter
 
