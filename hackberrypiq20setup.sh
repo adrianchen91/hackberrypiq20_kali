@@ -827,11 +827,18 @@ configure_device_tree() {
         
         # Build and install
         print_status "Building and installing device tree..."
-        if make -C /opt/hackberrypiq20 clean 2>/dev/null && make -C /opt/hackberrypiq20 install 2>/dev/null; then
-            print_status "Device tree installed successfully"
-            print_warning "System reboot required for changes to take effect"
-            track_success
-            return 0
+        if make -C /opt/hackberrypiq20 clean 2>/dev/null 2>/dev/null; then
+            print_status "Device tree cleaned successfully"
+            if make -C /opt/hackberrypiq20 install 2>/dev/null; then
+                print_status "Device tree built and installed"
+                print_warning "System reboot required for changes to take effect"
+                track_success
+                return 0
+            else
+                print_error "Failed to install device tree"
+                track_failure "device tree"
+                return 1
+            fi
         else
             print_error "Failed to build/install device tree"
             track_failure "device tree"
