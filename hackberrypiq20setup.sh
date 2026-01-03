@@ -8,6 +8,7 @@
 # Usage: sudo ./hackberrypiq20setup.sh [OPTIONS]
 # Maintainer: adrianchen91
 # Source: https://github.com/adrianchen91/hackberrypiq20_kali
+# CODEOWNERS: @adrianchen91
 ################################################################################
 
 set -uo pipefail  # Exit on undefined variables and pipe failures, but allow error recovery
