@@ -246,7 +246,7 @@ configure_cpu_governor() {
     print_status "Setting CPU governor to: $CPU_GOVERNOR"
     
     # Install linux-cpupower if not available
-    if ! command -v cpupower &>/dev/null; then
+    if ! which cpupower &>/dev/null; then
         print_status "Installing linux-cpupower..."
         if ! apt-get update && apt-get install -y linux-cpupower 2>/dev/null; then
             print_warning "Failed to install linux-cpupower, attempting to continue"
