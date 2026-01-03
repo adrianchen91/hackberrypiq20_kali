@@ -580,20 +580,27 @@ configure_raspi_config() {
     # Check if already cloned
     if [[ -d "/opt/raspi-config" ]]; then
         print_status "raspi-config already cloned, updating..."
-        cd /opt/raspi-config || return 1
-        git pull 2>/dev/null || print_warning "Failed to update raspi-config"
+        if cd /opt/raspi-config && git pull; then
+            print_status "raspi-config repository updated"
+        else
+            print_warning "Failed to update raspi-config, continuing with existing version"
+        fi
     else
         print_status "Cloning raspi-config repository..."
-        if ! cd /opt && git clone https://github.com/RPi-Distro/raspi-config.git 2>/dev/null; then
+        if ! git -C /opt clone https://github.com/RPi-Distro/raspi-config.git; then
             print_error "Failed to clone raspi-config repository"
             track_failure "raspi-config"
             return 1
         fi
-        cd /opt/raspi-config || return 1
+        if [[ ! -d "/opt/raspi-config" ]]; then
+            print_error "Clone appeared to succeed but directory not found"
+            track_failure "raspi-config"
+            return 1
+        fi
     fi
     
     # Checkout branch
-    if ! git checkout trixie 2>/dev/null; then
+    if ! git -C /opt/raspi-config checkout trixie 2>/dev/null; then
         print_warning "Failed to checkout trixie branch"
     fi
     
@@ -628,12 +635,20 @@ configure_eeprom() {
     # Check if already cloned
     if [[ -d "/opt/rpi-eeprom" ]]; then
         print_status "rpi-eeprom already cloned, updating..."
-        cd /opt/rpi-eeprom || return 1
-        git pull 2>/dev/null || print_warning "Failed to update rpi-eeprom"
+        if cd /opt/rpi-eeprom && git pull; then
+            print_status "rpi-eeprom repository updated"
+        else
+            print_warning "Failed to update rpi-eeprom, continuing with existing version"
+        fi
     else
         print_status "Cloning rpi-eeprom repository..."
-        if ! cd /opt && git clone https://github.com/raspberrypi/rpi-eeprom.git 2>/dev/null; then
+        if ! git -C /opt clone https://github.com/raspberrypi/rpi-eeprom.git; then
             print_error "Failed to clone rpi-eeprom repository"
+            track_failure "rpi-eeprom"
+            return 1
+        fi
+        if [[ ! -d "/opt/rpi-eeprom" ]]; then
+            print_error "Clone appeared to succeed but directory not found"
             track_failure "rpi-eeprom"
             return 1
         fi
@@ -695,22 +710,28 @@ configure_device_tree() {
     # Check if already cloned
     if [[ -d "/opt/hackberrypiq20" ]]; then
         print_status "hackberrypiq20 already cloned, updating..."
-        cd /opt/hackberrypiq20 || return 1
-        git pull 2>/dev/null || print_warning "Failed to update hackberrypiq20"
+        if cd /opt/hackberrypiq20 && git pull; then
+            print_status "hackberrypiq20 repository updated"
+        else
+            print_warning "Failed to update hackberrypiq20, continuing with existing version"
+        fi
     else
         print_status "Cloning hackberrypiq20 repository..."
-        if ! cd /opt && git clone https://github.com/adrianchen91/hackberrypiq20.git 2>/dev/null; then
+        if ! git -C /opt clone https://github.com/adrianchen91/hackberrypiq20.git; then
             print_error "Failed to clone hackberrypiq20 repository"
+            track_failure "device tree"
+            return 1
+        fi
+        if [[ ! -d "/opt/hackberrypiq20" ]]; then
+            print_error "Clone appeared to succeed but directory not found"
             track_failure "device tree"
             return 1
         fi
     fi
     
     if [[ -d "/opt/hackberrypiq20" ]]; then
-        cd /opt/hackberrypiq20 || return 1
-        
         # Checkout branch
-        if ! git checkout ac-module-rework 2>/dev/null; then
+        if ! git -C /opt/hackberrypiq20 checkout ac-module-rework 2>/dev/null; then
             print_warning "Failed to checkout ac-module-rework branch"
         fi
         
@@ -724,7 +745,7 @@ configure_device_tree() {
         
         # Build and install
         print_status "Building and installing device tree..."
-        if make 2>/dev/null && make install 2>/dev/null; then
+        if make -C /opt/hackberrypiq20 2>/dev/null && make -C /opt/hackberrypiq20 install 2>/dev/null; then
             print_status "Device tree installed successfully"
             print_warning "System reboot required for changes to take effect"
             track_success
@@ -859,34 +880,63 @@ configure_greetd() {
     print_status "Installing and configuring greetd..."
     
     # Install greetd and tuigreet
-    if ! apt-get update && apt-get install -y greetd tuigreet 2>/dev/null; then
+    print_status "Installing greetd and tuigreet packages..."
+    if ! apt-get update >/dev/null 2>&1; then
+        print_warning "Failed to update package lists"
+    fi
+    
+    if ! apt-get install -y greetd tuigreet >/dev/null 2>&1; then
         print_error "Failed to install greetd/tuigreet"
         track_failure "greetd"
         return 1
     fi
 
-    # Add _greetd user to video and render groups
-    usermod -aG video _greetd 2>/dev/null || {
-        print_warning "Failed to add _greetd to video group"
-    }
-    usermod -aG render _greetd 2>/dev/null || {
-        print_warning "Failed to add _greetd to render group"
-    }
+    # Extract user from existing config, or use default
+    local greetd_user="_greetd"
+    if [[ -f "/etc/greetd/config.toml" ]]; then
+        local extracted_user
+        extracted_user=$(grep -oP '^\s*user\s*=\s*"\K[^"]+' /etc/greetd/config.toml | head -1)
+        if [[ -n "$extracted_user" ]]; then
+            greetd_user="$extracted_user"
+            print_status "Using existing greetd user from config: $greetd_user"
+        fi
+    fi
 
-    # Configure greetd
+    # Verify the user exists
+    if ! id "$greetd_user" &>/dev/null; then
+        print_error "Greetd user '$greetd_user' does not exist"
+        track_failure "greetd"
+        return 1
+    fi
+
+    # Add greetd user to video and render groups
+    print_status "Adding $greetd_user to video and render groups..."
+    if usermod -aG video "$greetd_user" 2>/dev/null; then
+        print_status "Added $greetd_user to video group"
+    else
+        print_warning "Failed to add $greetd_user to video group"
+    fi
+    
+    if usermod -aG render "$greetd_user" 2>/dev/null; then
+        print_status "Added $greetd_user to render group"
+    else
+        print_warning "Failed to add $greetd_user to render group"
+    fi
+
+    # Configure greetd with the correct user
     print_status "Configuring greetd..."
-    if tee /etc/greetd/config.toml >/dev/null <<'EOF'
+    if tee /etc/greetd/config.toml >/dev/null <<EOF
 [terminal]
 vt = 7
 
 [default_session]
-command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-command 1 --kb-sessions 5 --cmd '${SHELL:-/bin/sh}'"
-user = "_greetd"
+command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-command 1 --kb-sessions 5 --cmd '\${SHELL:-/bin/sh}'"
+user = "$greetd_user"
 EOF
     then
         # Enable and start greetd
         if systemctl enable --now greetd 2>/dev/null; then
-            print_status "✓ Greetd display manager configured"
+            print_status "✓ Greetd display manager configured with user: $greetd_user"
             echo ""
             print_status "TTY Access Instructions (for troubleshooting):"
             echo "  If you need to drop to a command prompt:"
@@ -900,7 +950,7 @@ EOF
             track_success
             return 0
         else
-            print_warning "Failed to enable greetd service"
+            print_error "Failed to enable greetd service"
             track_failure "greetd service"
             return 1
         fi
