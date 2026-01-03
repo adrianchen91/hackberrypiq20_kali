@@ -6,6 +6,8 @@
 #              Configures auto-login, CPU governor, power management, service
 #              optimization, and other system performance settings.
 # Usage: sudo ./hackberrypiq20setup.sh [OPTIONS]
+# Maintainer: adrianchen91
+# Source: https://github.com/adrianchen91/hackberrypiq20_kali
 ################################################################################
 
 set -uo pipefail  # Exit on undefined variables and pipe failures, but allow error recovery
@@ -1188,6 +1190,27 @@ configure_antigravity() {
     fi
 }
 
+# KDE additional package workaround
+configure_kde_workaround() {
+    if dpkg-query -W -f='${Status}' kali-desktop-kde 2>/dev/null | grep -q "ok installed"; then
+        print_status "kali-desktop-kde is installed, installing qtnetwork and notification module"
+        apt-get update >/dev/null 2>&1 || true
+        if apt-get install -y qml6-module-qtnetwork qml6-module-org-kde-notifications >/dev/null 2>&1; then
+            print_status "KDE additional packages installed successfully"
+            track_success
+            return 0
+        else
+            print_warning "Failed to install KDE additional packages"
+            track_failure "kde_workaround"
+            return 1
+        fi
+    else
+        print_status "Skipping KDE additional package workaround"
+        track_skip "kde_workaround"
+        return 0
+    fi
+}
+
 # Main execution
 main() {
     print_status "Starting HackBerry Pi CM5 Q20 Setup Script"
@@ -1217,6 +1240,7 @@ main() {
     configure_greetd || true
     configure_brave || true
     configure_antigravity || true
+    configure_kde_workaround || true
     configure_wifi || true
     configure_bluetooth || true
     

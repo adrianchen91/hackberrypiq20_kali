@@ -13,8 +13,8 @@ sudo ./hackberrypiq20setup.sh
 
 **With options:**
 ```bash
-# Enable fstab optimization and auto-login
-sudo ./hackberrypiq20setup.sh -f -u kali
+# Enable fstab optimization
+sudo ./hackberrypiq20setup.sh -f
 
 # Set custom CPU governor to performance mode
 sudo ./hackberrypiq20setup.sh -g performance
@@ -38,7 +38,6 @@ sudo ./hackberrypiq20setup.sh -h
 - Fstab noatime optimization (`-f`)
 - Greetd display manager (`-d`)
 - Device tree compilation (`-t`)
-- Auto-login configuration (`-u`)
 
 ---
 
@@ -374,7 +373,6 @@ The default Kali display manager may not work well with the HackBerry's custom k
   - F12 (or Fn+Power): Power off
   - F1 (or Fn+Cmd): Execute arbitrary command
   - F5 (or Fn+Session): Switch sessions
-- Supports auto-login (optional, disabled by default)
 
 **Enable with:**
 ```bash
@@ -443,6 +441,19 @@ KDE with wayland has better out-of-the-box touchcreen and gestures compared to x
 ```
 sudo apt update
 sudo apt install -y kali-desktop-kde qt6-wayland xdg-desktop-portal xdg-desktop-portal-kde plasma-desktop plasma-workspace plasma-framework powerdevil upower qt6-base-bin qml6-module-qtnetwork qml6-module-org-kde-notifications
+```
+
+### KDE Additional Package Workaround
+
+If KDE is installed but missing some required QML modules, run this workaround to install the necessary packages:
+
+```
+if dpkg-query -W -f='${Status}' kali-desktop-kde 2>/dev/null | grep -q "ok installed"; then
+  echo "kali-desktop-kde is installed, installing qtnetwork and notification module"
+  sudo apt install -y qml6-module-qtnetwork qml6-module-org-kde-notifications
+else
+  echo "Skipping KDE additional package workaround"
+fi
 ```
 
 **Remove XFCE (optional):**
