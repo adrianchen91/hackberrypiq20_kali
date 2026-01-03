@@ -1109,7 +1109,7 @@ configure_brave() {
     fi
 
     # Check if already installed
-    if command -v brave &>/dev/null; then
+    if command -v brave-browser &>/dev/null; then
         print_status "Brave browser already installed"
         track_skip "brave"
         return 0
