@@ -40,6 +40,7 @@ ENABLE_DEVICE_TREE=false
 VERBOSE=false
 ENABLE_BRAVE=false
 ENABLE_ANTIGRAVITY=false
+ENABLE_CLOUD_CLEANUP=true
 
 ################################################################################
 # Functions
@@ -185,6 +186,10 @@ parse_arguments() {
                 ENABLE_ANTIGRAVITY=true
                 shift
                 ;;
+            --disable-cloud-cleanup)
+                ENABLE_CLOUD_CLEANUP=false
+                shift
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -239,6 +244,7 @@ display_config() {
     echo "  Verbose Mode: $VERBOSE"
     echo "  Brave Install: $ENABLE_BRAVE"
     echo "  Antigravity Install: $ENABLE_ANTIGRAVITY"
+    echo "  Cloud Cleanup: $ENABLE_CLOUD_CLEANUP"
 }
 
 # Configure auto-login user
@@ -590,6 +596,46 @@ configure_services() {
     return 0
 }
 
+# Clean up cloud-init services
+configure_cloud_cleanup() {
+    if ! $ENABLE_CLOUD_CLEANUP; then
+        print_warning "Cloud cleanup disabled"
+        track_skip_flag "cloud cleanup"
+        return 0
+    fi
+
+    print_status "Disabling cloud-init services..."
+    
+    # Define cloud services to disable
+    local cloud_services=(
+        "cloud-init-main.service"
+        "cloud-init-local.service"
+        "cloud-init-network.service"
+        "cloud-init-hotplugd.service"
+        "cloud-final.service"
+        "cloud-config.service"
+    )
+
+    local services_failed=0
+    for service in "${cloud_services[@]}"; do
+        if systemctl disable "$service" 2>/dev/null; then
+            print_status "Disabled $service"
+        else
+            print_warning "Service $service not found or failed to disable (continuing)"
+            ((services_failed++))
+        fi
+    done
+
+    if [[ $services_failed -eq 0 ]]; then
+        print_status "Cloud cleanup completed"
+        track_success
+    else
+        print_warning "Cloud cleanup completed with $services_failed failures (non-critical)"
+        track_success
+    fi
+    return 0
+}
+
 # Configure raspi-config
 configure_raspi_config() {
     if ! $ENABLE_RASPI_CONFIG; then
@@ -816,7 +862,7 @@ EOF
             print_warning "netplan generate failed"
         }
 
-        # Disable networking service
+        # Disable old networking service and NetworkManager-wait-online to prevent conflicts
         if systemctl disable --now networking 2>/dev/null; then
             print_status "Disabled old networking service"
         else
@@ -827,6 +873,13 @@ EOF
         if systemctl enable --now NetworkManager 2>/dev/null; then
             print_status "Network optimization completed"
             track_success
+
+            if systemctl disable --now NetworkManager-wait-online.service 2>/dev/null; then
+                print_status "Disabled NetworkManager-wait-online to prevent conflicts"
+            else
+                print_warning "NetworkManager-wait-online.service not found or failed to disable (may not exist)"
+            fi
+
             return 0
         else
             print_error "Failed to enable NetworkManager"
@@ -1025,6 +1078,13 @@ configure_brave() {
         return 0
     fi
 
+    # Check if already installed
+    if command -v brave &>/dev/null; then
+        print_status "Brave browser already installed"
+        track_skip "brave"
+        return 0
+    fi
+
     print_status "Installing Brave browser..."
 
     # Ensure curl is present
@@ -1063,6 +1123,13 @@ configure_antigravity() {
     if ! $ENABLE_ANTIGRAVITY; then
         print_warning "Antigravity installation disabled"
         track_skip_flag "antigravity"
+        return 0
+    fi
+
+    # Check if already installed
+    if command -v antigravity &>/dev/null; then
+        print_status "Antigravity already installed"
+        track_skip "antigravity"
         return 0
     fi
 
@@ -1114,6 +1181,7 @@ main() {
     configure_nvme_power || true
     configure_fstab || true
     configure_services || true
+    configure_cloud_cleanup || true
     configure_device_tree || true
     configure_networking || true
     configure_xorg || true

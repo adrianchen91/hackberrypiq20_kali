@@ -236,6 +236,44 @@ sudo systemctl disable --now NetworkManager-wait-online.service 2>/dev/null || t
 sudo systemctl disable --now networking-wait-online 2>/dev/null || true
 ```
 
+## Cloud-init Cleanup (Optional)
+
+Cloud-init is used for automatic cloud instance provisioning and is unnecessary on a local penetration testing device. Disabling cloud services reduces boot time and system overhead.
+
+**What this does:**
+- Disables cloud-init services that run at boot
+- Removes unnecessary cloud provisioning delays
+- Frees up system resources on the device
+
+**Services disabled:**
+- `cloud-init-main.service` - Main cloud-init service
+- `cloud-init-local.service` - Local cloud-init setup
+- `cloud-init-network.service` - Network cloud-init setup
+- `cloud-init-hotplugd.service` - Cloud hotplug daemon
+- `cloud-final.service` - Final cloud-init service
+- `cloud-config.service` - Cloud configuration service
+
+**Enable with:**
+```bash
+sudo ./hackberrypiq20setup.sh
+```
+(Cloud cleanup is enabled by default)
+
+**Disable if needed:**
+```bash
+sudo ./hackberrypiq20setup.sh --disable-cloud-cleanup
+```
+
+**Manual cleanup:**
+```bash
+sudo systemctl disable --now cloud-init-main.service 2>/dev/null || true
+sudo systemctl disable --now cloud-init-local.service 2>/dev/null || true
+sudo systemctl disable --now cloud-init-network.service 2>/dev/null || true
+sudo systemctl disable --now cloud-init-hotplugd.service 2>/dev/null || true
+sudo systemctl disable --now cloud-final.service 2>/dev/null || true
+sudo systemctl disable --now cloud-config.service 2>/dev/null || true
+```
+
 ## Networking Optimisation: NetworkManager + Netplan
 
 Modern Linux systems are moving away from traditional networking toward netplan + NetworkManager. This provides better wireless management, VPN support, and dynamic configuration.
@@ -244,6 +282,7 @@ Modern Linux systems are moving away from traditional networking toward netplan 
 - Configures netplan to use NetworkManager as the rendering backend
 - Disables the old `networking.service` 
 - Ensures NetworkManager is enabled and running
+- Disables `NetworkManager-wait-online.service` to prevent boot delays and conflicts with NetworkManager
 - Provides a unified interface for WiFi, Ethernet, VPN, and other network connections
 - Supports connection profiles, automatic reconnection, and better CLI tools
 
