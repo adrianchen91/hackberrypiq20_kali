@@ -220,7 +220,8 @@ sudo systemctl disable --now bluetooth.service 2>/dev/null || true
 sudo systemctl disable --now packagekit.service 2>/dev/null || true
 
 # Keep wpa_supplicant by default (NetworkManager can start it)
-sudo systemctl disable --now wpa_supplicant.service 2>/dev/null || true
+**Don't disable it right now**
+sudo systemctl disable wpa_supplicant.service 2>/dev/null || true
 
 # PHP’s session cleaner off (you said PHP stays, but not the timer)
 sudo systemctl disable --now phpsessionclean.service phpsessionclean.timer 2>/dev/null || true

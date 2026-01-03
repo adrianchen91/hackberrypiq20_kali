@@ -224,7 +224,7 @@ display_config() {
 # Configure auto-login user
 configure_auto_login() {
     if [[ -z "$AUTO_LOGIN_USER" ]]; then
-        print_warning "No auto-login user specified"
+        print_status "No auto-login user specified (auto-login disabled)"
         return 0
     fi
 
@@ -240,7 +240,10 @@ configure_auto_login() {
     # Uncomment and modify based on your system's display manager
     # sed -i "s/#autologin-user=/autologin-user=$AUTO_LOGIN_USER/" /etc/lightdm/lightdm.conf
     
-    print_status "Auto-login configuration completed"
+    print_status "✓ Auto-login configured for user: $AUTO_LOGIN_USER"
+    print_warning "Please verify auto-login works correctly after reboot. If issues occur, you can use Ctrl+Alt+F5 to access a TTY login."
+    track_success
+    return 0
 }
 
 # Configure CPU governor
@@ -261,9 +264,34 @@ configure_cpu_governor() {
         fi
     fi
 
+    # Check if service already exists
+    local service_file="/etc/systemd/system/cpufreq-tune.service"
+    if [[ -f "$service_file" ]]; then
+        print_status "cpufreq-tune service already exists"
+        
+        # Check if service is enabled
+        if systemctl is-enabled cpufreq-tune.service &>/dev/null; then
+            print_status "cpufreq-tune service already enabled"
+            track_skip "CPU governor"
+            return 0
+        else
+            print_status "Enabling existing cpufreq-tune service..."
+            systemctl daemon-reload
+            if systemctl enable --now cpufreq-tune.service 2>/dev/null; then
+                print_status "CPU governor configuration completed"
+                track_success
+                return 0
+            else
+                print_warning "Failed to enable cpufreq-tune.service"
+                track_failure "CPU governor service"
+                return 1
+            fi
+        fi
+    fi
+
     # Create systemd service for CPU frequency scaling
     print_status "Creating cpufreq-tune systemd service..."
-    if tee /etc/systemd/system/cpufreq-tune.service >/dev/null <<EOF
+    if tee "$service_file" >/dev/null <<EOF
 [Unit]
 Description=Custom CPU frequency scaling with $CPU_GOVERNOR
 After=multi-user.target
@@ -515,7 +543,7 @@ configure_services() {
 
     local services_failed=0
     for service in "${services_to_disable[@]}"; do
-        if systemctl disable --now "$service" 2>/dev/null; then
+        if systemctl disable "$service" 2>/dev/null; then
             print_status "Disabled $service"
         else
             print_warning "Service $service not found or failed to disable (continuing)"
@@ -858,7 +886,17 @@ EOF
     then
         # Enable and start greetd
         if systemctl enable --now greetd 2>/dev/null; then
-            print_status "Greetd configuration completed"
+            print_status "✓ Greetd display manager configured"
+            echo ""
+            print_status "TTY Access Instructions (for troubleshooting):"
+            echo "  If you need to drop to a command prompt:"
+            echo "  • Using default keyboard layer 2 (Fn key active):"
+            echo "    Ctrl+Alt+F5 → Access TTY login"
+            echo "  • Using normal layer 1:"
+            echo "    Ctrl+Alt+Fn+F5 → Access TTY login"
+            echo "  • Return to graphical interface:"
+            echo "    Ctrl+Alt+F7 or type 'exit' in TTY"
+            echo ""
             track_success
             return 0
         else
