@@ -42,7 +42,7 @@ ENABLE_DEVICE_TREE=false
 VERBOSE=false
 ENABLE_BRAVE=false
 ENABLE_ANTIGRAVITY=false
-ENABLE_CLOUD_CLEANUP=true
+ENABLE_CLOUD_CLEANUP=false
 
 ################################################################################
 # Functions
@@ -114,6 +114,7 @@ Options:
     -v, --verbose                   Enable verbose output
     --install-brave                Install Brave browser
     --install-antigravity          Install Antigravity package and repository
+    --enable-cloud-cleanup         Enable cloud-init cleanup/optimisation (disables cloud-init services)
     -h, --help                      Display this help message
 
 Examples:
@@ -181,6 +182,10 @@ parse_arguments() {
                 ;;
             --install-antigravity)
                 ENABLE_ANTIGRAVITY=true
+                shift
+                ;;
+            --enable-cloud-cleanup)
+                ENABLE_CLOUD_CLEANUP=true
                 shift
                 ;;
             --disable-cloud-cleanup)
@@ -822,10 +827,23 @@ configure_device_tree() {
         
         # Install build dependencies
         print_status "Installing build dependencies..."
-        if ! apt-get install -y make linux-headers-rpi-2712 2>/dev/null; then
-            print_error "Failed to install build dependencies"
+        if ! apt-get install -y make 2>/dev/null; then
+            print_error "Failed to install make"
             track_failure "device tree"
             return 1
+        fi
+        if dpkg-query -W -f='${Status}' linux-headers-rpi-2712 2>/dev/null | grep -q "install ok installed"; then
+            if ! apt-get install --reinstall -y linux-headers-rpi-2712 2>/dev/null; then
+                print_error "Failed to reinstall linux-headers-rpi-2712"
+                track_failure "device tree"
+                return 1
+            fi
+        else
+            if ! apt-get install -y linux-headers-rpi-2712 2>/dev/null; then
+                print_error "Failed to install linux-headers-rpi-2712"
+                track_failure "device tree"
+                return 1
+            fi
         fi
         
         # Build and install
