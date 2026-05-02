@@ -288,6 +288,7 @@ After=multi-user.target
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/bin/sh -c 'echo cpu | /usr/bin/tee /sys/class/leds/ACT/trigger'
 ExecStart=/usr/bin/cpupower frequency-set -g $CPU_GOVERNOR
 
 [Install]
