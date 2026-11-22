@@ -43,6 +43,8 @@ VERBOSE=false
 ENABLE_BRAVE=false
 ENABLE_ANTIGRAVITY=false
 ENABLE_CLOUD_CLEANUP=false
+ENABLE_KDE_OPTIMIZATION=true
+DRY_RUN=false
 
 ################################################################################
 # Functions
@@ -114,6 +116,8 @@ Options:
     -v, --verbose                   Enable verbose output
     --install-brave                Install Brave browser
     --install-antigravity          Install Antigravity package and repository
+    -D, --dry-run                   Show what would change without modifying anything (no root needed)
+    -k, --disable-kde-opt           Skip KDE Plasma tuning (animations, blur, borderless maximized, lock, splash, Konsole, autostarts)
     --enable-cloud-cleanup         Enable cloud-init cleanup/optimisation (disables cloud-init services)
     -h, --help                      Display this help message
 
@@ -174,6 +178,14 @@ parse_arguments() {
                 ;;
             -t|--enable-device-tree)
                 ENABLE_DEVICE_TREE=true
+                shift
+                ;;
+            -D|--dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            -k|--disable-kde-opt)
+                ENABLE_KDE_OPTIMIZATION=false
                 shift
                 ;;
             --install-brave)
@@ -241,6 +253,31 @@ display_config() {
     echo "  Brave Install: $ENABLE_BRAVE"
     echo "  Antigravity Install: $ENABLE_ANTIGRAVITY"
     echo "  Cloud Cleanup: $ENABLE_CLOUD_CLEANUP"
+    echo "  KDE Optimization: $ENABLE_KDE_OPTIMIZATION"
+    echo "  Dry Run: $DRY_RUN"
+}
+
+# Write the cpufreq-tune unit (single source of truth for new and updated installs)
+cpufreq_unit_text() {
+    # The leading '-' on ExecStartPre keeps the unit working if the ACT LED is absent
+    cat <<EOF
+[Unit]
+Description=Custom CPU frequency scaling with $CPU_GOVERNOR
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/bin/sh -c 'echo cpu | /usr/bin/tee /sys/class/leds/ACT/trigger'
+ExecStart=/usr/bin/cpupower frequency-set -g $CPU_GOVERNOR
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+write_cpufreq_unit() {
+    cpufreq_unit_text | tee "$1" >/dev/null
 }
 
 # Configure CPU governor
@@ -272,6 +309,23 @@ configure_cpu_governor() {
         
         if [[ "$current_governor" == "$CPU_GOVERNOR" ]]; then
             print_status "Service already configured with governor: $current_governor"
+            # Rewrite the unit if it drifted from the expected content (e.g. missing ACT LED trigger)
+            if [[ "$(cat "$service_file")" != "$(cpufreq_unit_text)" ]]; then
+                print_status "Unit content differs from expected, updating (ACT LED trigger = cpu)..."
+                if write_cpufreq_unit "$service_file"; then
+                    systemctl daemon-reload
+                    if systemctl enable --now cpufreq-tune.service 2>/dev/null; then
+                        track_success
+                        return 0
+                    fi
+                    print_warning "Failed to restart cpufreq-tune.service"
+                    track_failure "CPU governor service"
+                    return 1
+                fi
+                print_error "Failed to update cpufreq-tune service file"
+                track_failure "CPU governor"
+                return 1
+            fi
             # Check if service is enabled
             if systemctl is-enabled cpufreq-tune.service &>/dev/null; then
                 print_status "cpufreq-tune service already enabled"
@@ -281,20 +335,7 @@ configure_cpu_governor() {
         else
             # Governor differs, update the service
             print_status "Governor mismatch: service has '$current_governor', updating to '$CPU_GOVERNOR'..."
-            if tee "$service_file" >/dev/null <<EOF
-[Unit]
-Description=Custom CPU frequency scaling with $CPU_GOVERNOR
-After=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStartPre=/usr/bin/sh -c 'echo cpu | /usr/bin/tee /sys/class/leds/ACT/trigger'
-ExecStart=/usr/bin/cpupower frequency-set -g $CPU_GOVERNOR
-
-[Install]
-WantedBy=multi-user.target
-EOF
-            then
+            if write_cpufreq_unit "$service_file"; then
                 systemctl daemon-reload
                 if systemctl enable --now cpufreq-tune.service 2>/dev/null; then
                     print_status "CPU governor updated and service restarted"
@@ -333,19 +374,7 @@ EOF
 
     # Create systemd service for CPU frequency scaling
     print_status "Creating cpufreq-tune systemd service..."
-    if tee "$service_file" >/dev/null <<EOF
-[Unit]
-Description=Custom CPU frequency scaling with $CPU_GOVERNOR
-After=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/cpupower frequency-set -g $CPU_GOVERNOR
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    then
+    if write_cpufreq_unit "$service_file"; then
         # Enable and start the service
         systemctl daemon-reload
         if systemctl enable --now cpufreq-tune.service 2>/dev/null; then
@@ -405,6 +434,70 @@ configure_bluetooth() {
     return 0
 }
 
+# Dry-run mode: shadow every state-changing command with a function that only
+# reports what it would do. Read-only commands (systemctl is-enabled, cat, grep,
+# dpkg-query, kreadconfig6, ...) still run for real so the report is accurate.
+dry_note() {
+    echo -e "${YELLOW}[DRY-RUN]${NC} $*" >&2
+}
+
+enable_dry_run() {
+    local c
+    for c in apt-get git netplan sysctl update-initramfs mount usermod rfkill \
+             curl make ln cp mkdir chmod gpg kwriteconfig6; do
+        eval "$c() { dry_note would run: $c \"\$@\"; return 0; }"
+    done
+
+    systemctl() {
+        case "${1:-}" in
+            is-enabled|is-active|status|show|cat|list-units|list-unit-files)
+                command systemctl "$@" ;;
+            *) dry_note would run: systemctl "$@"; return 0 ;;
+        esac
+    }
+
+    sed() {
+        local a
+        for a in "$@"; do
+            if [[ "$a" == -i* ]]; then
+                dry_note would run: sed "$@"
+                return 0
+            fi
+        done
+        command sed "$@"
+    }
+
+    # Report whether a file would be created, changed or left alone
+    tee() {
+        local f="${*: -1}" tmp
+        tmp=$(mktemp)
+        cat >"$tmp"
+        if [[ -r "$f" ]]; then
+            if cmp -s "$tmp" "$f"; then
+                dry_note "$f unchanged"
+            else
+                dry_note "$f would change:"
+                diff -u "$f" "$tmp" | command sed 's/^/    /' >&2
+            fi
+        elif [[ -e "$f" ]]; then
+            dry_note "$f exists but is not readable here; would be rewritten"
+        else
+            dry_note "$f would be created:"
+            command sed 's/^/    + /' "$tmp" >&2
+        fi
+        rm -f "$tmp"
+    }
+
+    # Drop sudo's options and run the command directly (it hits the shadows above)
+    sudo() {
+        local -a a=("$@")
+        while [[ "${a[0]:-}" == -* ]]; do
+            if [[ "${a[0]}" == -u ]]; then a=("${a[@]:2}"); else a=("${a[@]:1}"); fi
+        done
+        "${a[@]}"
+    }
+}
+
 # Print summary of execution
 print_summary() {
     echo ""
@@ -446,6 +539,26 @@ print_summary() {
     echo ""
 }
 
+# Append a kernel parameter to the single line in cmdline.txt if its key is absent
+add_cmdline_param() {
+    local key="$1" param="$2" file="/boot/firmware/cmdline.txt"
+
+    if [[ ! -f "$file" ]]; then
+        print_warning "$file not found, cannot add $param"
+        return 1
+    fi
+    if grep -qE "(^|[[:space:]])${key//./\\.}(=|[[:space:]]|$)" "$file"; then
+        print_status "Kernel parameter $key already configured"
+        return 0
+    fi
+    print_status "Adding kernel parameter: $param"
+    cp -n "$file" "$file.backup" 2>/dev/null || true
+    sed -i -E "1 s/[[:space:]]*\$/ $param/" "$file" || {
+        print_warning "Failed to add $param to kernel parameters"
+        return 1
+    }
+}
+
 # Configure NVMe power management
 configure_nvme_power() {
     if ! $ENABLE_POWER_MANAGEMENT; then
@@ -457,14 +570,10 @@ configure_nvme_power() {
     print_status "Configuring NVMe power management..."
     
     # Add PCIe ASPM power saving to kernel parameters
-    if grep -q "pcie_aspm.policy" /boot/firmware/cmdline.txt; then
-        print_status "PCIe ASPM already configured"
-    else
-        print_status "Adding PCIe ASPM power saving to kernel parameters..."
-        if ! sed -i "s/ds=nocloud/ds=nocloud pcie_aspm.policy=powersave/" /boot/firmware/cmdline.txt; then
-            print_warning "Failed to add PCIe ASPM to kernel parameters"
-        fi
-    fi
+    add_cmdline_param "pcie_aspm.policy" "pcie_aspm.policy=powersave"
+    # nvme_core is built into the Pi kernel, so modprobe.d options are ignored;
+    # the parameter must be on the kernel command line to take effect.
+    add_cmdline_param "nvme_core.default_ps_max_latency_us" "nvme_core.default_ps_max_latency_us=5500"
 
     # Configure NVMe default power state
     print_status "Configuring NVMe default power state..."
@@ -590,6 +699,10 @@ configure_services() {
         "colord.service"
         "NetworkManager-wait-online.service"
         "networking-wait-online.service"
+        "cups-browsed.service"
+        "man-db.timer"
+        "e2scrub_all.timer"
+        "fwupd-refresh.timer"
     )
 
     local services_failed=0
@@ -1048,7 +1161,7 @@ configure_greetd() {
 vt = 7
 
 [default_session]
-command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-command 1 --kb-sessions 5 --cmd '\${SHELL:-/bin/sh}'"
+command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-command 1 --kb-sessions 5 --sessions /usr/share/wayland-sessions --cmd '\${SHELL:-/bin/sh}'"
 user = "$greetd_user"
 EOF
     then
@@ -1231,16 +1344,206 @@ configure_kde_workaround() {
     fi
 }
 
+# System-wide power/write tuning: sysctl, journald, WiFi power save
+configure_power_tuning() {
+    if ! $ENABLE_POWER_MANAGEMENT; then
+        print_warning "Power management disabled, skipping system power tuning"
+        track_skip_flag "power tuning"
+        return 0
+    fi
+
+    print_status "Applying system power and write-reduction tuning..."
+    local ok=true
+
+    # Batch disk writeback, keep swapping and cache reclaim gentle
+    if tee /etc/sysctl.d/99-hackberry-power.conf >/dev/null <<'EOF'
+# Flush dirty pages every 15s instead of 5s so storage can stay idle longer
+vm.dirty_writeback_centisecs = 1500
+# Prefer RAM over swap (less storage I/O)
+vm.swappiness = 10
+# Keep dentry/inode caches longer (fewer disk lookups)
+vm.vfs_cache_pressure = 50
+EOF
+    then
+        sysctl --system >/dev/null 2>&1 || print_warning "Failed to apply sysctl settings"
+    else
+        print_warning "Failed to write sysctl tuning"
+        ok=false
+    fi
+
+    # Cap journal size and sync it less often
+    mkdir -p /etc/systemd/journald.conf.d
+    if tee /etc/systemd/journald.conf.d/99-hackberry.conf >/dev/null <<'EOF'
+[Journal]
+SystemMaxUse=100M
+SyncIntervalSec=5m
+RateLimitBurst=2000
+EOF
+    then
+        systemctl restart systemd-journald 2>/dev/null || print_warning "Failed to restart systemd-journald"
+    else
+        print_warning "Failed to write journald tuning"
+        ok=false
+    fi
+
+    # WiFi radio power save (NetworkManager: 3 = enable)
+    mkdir -p /etc/NetworkManager/conf.d
+    if tee /etc/NetworkManager/conf.d/99-wifi-powersave.conf >/dev/null <<'EOF'
+[connection]
+wifi.powersave = 3
+EOF
+    then
+        systemctl reload NetworkManager 2>/dev/null || true
+    else
+        print_warning "Failed to write WiFi power save config"
+        ok=false
+    fi
+
+    if $ok; then
+        track_success
+        return 0
+    fi
+    track_failure "power tuning"
+    return 1
+}
+
+# KDE Plasma tuning for low-power ARM hardware (applied for the invoking user)
+configure_kde_optimization() {
+    if ! $ENABLE_KDE_OPTIMIZATION; then
+        print_warning "KDE optimization disabled"
+        track_skip_flag "kde optimization"
+        return 0
+    fi
+
+    if ! dpkg-query -W -f='${Status}' kali-desktop-kde 2>/dev/null | grep -q "ok installed"; then
+        print_status "KDE not installed, skipping KDE optimization"
+        track_skip "kde optimization"
+        return 0
+    fi
+
+    local target_user="${SUDO_USER:-}"
+    if $DRY_RUN && [[ -z "$target_user" ]]; then
+        target_user="$(id -un)"
+    fi
+    if [[ -z "$target_user" || "$target_user" == "root" ]] || ! id "$target_user" &>/dev/null; then
+        print_warning "No non-root invoking user (run via sudo); skipping per-user KDE settings"
+        track_skip "kde optimization"
+        return 0
+    fi
+    if ! command -v kwriteconfig6 &>/dev/null || ! command -v kreadconfig6 &>/dev/null; then
+        print_warning "kwriteconfig6/kreadconfig6 not found, skipping KDE optimization"
+        track_skip "kde optimization"
+        return 0
+    fi
+
+    print_status "Applying KDE Plasma tuning for user $target_user..."
+    local user_home
+    user_home=$(getent passwd "$target_user" | cut -d: -f6)
+
+    # kcfg <file> <key> <value> <group>...
+    # Only sets keys the user has not already set, so re-runs never undo manual changes.
+    kcfg() {
+        local file="$1" key="$2" value="$3"; shift 3
+        local args=() g cur
+        for g in "$@"; do args+=(--group "$g"); done
+        cur=$(sudo -H -u "$target_user" kreadconfig6 --file "$file" "${args[@]}" --key "$key" 2>/dev/null)
+        if [[ -n "$cur" ]]; then
+            if [[ "$cur" != "$value" ]]; then
+                print_status "Keeping existing $file [$*] $key=$cur (script default: $value)"
+            fi
+            return 0
+        fi
+        sudo -H -u "$target_user" kwriteconfig6 --file "$file" "${args[@]}" --key "$key" "$value"
+    }
+
+    local failed=0
+    {
+        # Shorter animations: less GPU/CPU work and snappier feel
+        kcfg kdeglobals AnimationDurationFactor 0.25 KDE
+        # Keep the file indexer off (heavy on I/O and CPU)
+        kcfg baloofilerc "Indexing-Enabled" false "Basic Settings"
+        # Blur is costly on the Pi GPU
+        kcfg kwinrc blurEnabled false Plugins
+        # 720x720 screen: reclaim ~30px of height by hiding title bars on maximized windows
+        # (close with Alt+F4 / Meta+Q or the task manager)
+        kcfg kwinrc BorderlessMaximizedWindows true Windows
+        # Auto-lock after 10 minutes
+        kcfg kscreenlockerrc Autolock true Daemon
+        kcfg kscreenlockerrc Timeout 10 Daemon
+        # No splash screen (faster login, plain background instead)
+        kcfg ksplashrc Engine none KSplash
+        kcfg ksplashrc Theme None KSplash
+        # Konsole: hide the menu bar (more rows on a square screen)
+        kcfg konsolerc MenuBar Disabled MainWindow
+    } || failed=1
+
+    # Konsole profile sized so ~80 columns fit comfortably in 720px (only if no profile is set)
+    local konsole_dir="$user_home/.local/share/konsole"
+    local konsole_default
+    konsole_default=$(sudo -H -u "$target_user" kreadconfig6 --file konsolerc --group "Desktop Entry" --key DefaultProfile 2>/dev/null)
+    if [[ -z "$konsole_default" && ! -e "$konsole_dir/HackBerry.profile" ]]; then
+        sudo -H -u "$target_user" mkdir -p "$konsole_dir" || failed=1
+        if sudo -H -u "$target_user" tee "$konsole_dir/HackBerry.profile" >/dev/null <<'EOF'
+[Appearance]
+Font=Monospace,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+
+[General]
+Name=HackBerry
+Parent=FALLBACK/
+
+[Scrolling]
+HistorySize=5000
+EOF
+        then
+            kcfg konsolerc DefaultProfile HackBerry.profile "Desktop Entry" || failed=1
+        else
+            failed=1
+        fi
+    fi
+
+    # Hide background autostarts we don't need (user override with Hidden=true)
+    local autostart_dir="$user_home/.config/autostart" app
+    sudo -H -u "$target_user" mkdir -p "$autostart_dir" || failed=1
+    for app in org.kde.discover.notifier org.kde.kdeconnect.daemon; do
+        if [[ -e "/etc/xdg/autostart/$app.desktop" && ! -e "$autostart_dir/$app.desktop" ]]; then
+            if ! sudo -H -u "$target_user" tee "$autostart_dir/$app.desktop" >/dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=$app (disabled by hackberrypiq20setup)
+Hidden=true
+EOF
+            then
+                failed=1
+            fi
+        fi
+    done
+
+    unset -f kcfg
+    if [[ $failed -eq 0 ]]; then
+        print_status "KDE tuning applied (takes effect on next login)"
+        track_success
+        return 0
+    fi
+    print_warning "Some KDE settings failed to apply"
+    track_failure "kde optimization"
+    return 1
+}
+
 # Main execution
 main() {
     print_status "Starting HackBerry Pi CM5 Q20 Setup Script"
     
-    # Check root privileges
-    check_root
-    
     # Parse and validate arguments
     parse_arguments "$@"
     validate_parameters
+
+    # Check root privileges (not needed for a dry run, which changes nothing)
+    if $DRY_RUN; then
+        enable_dry_run
+        print_warning "DRY RUN: nothing will be modified. Failures below can be artefacts of skipped steps."
+    else
+        check_root
+    fi
     
     # Display configuration
     display_config
@@ -1261,6 +1564,8 @@ main() {
     configure_brave || true
     configure_antigravity || true
     configure_kde_workaround || true
+    configure_power_tuning || true
+    configure_kde_optimization || true
     configure_wifi || true
     configure_bluetooth || true
     

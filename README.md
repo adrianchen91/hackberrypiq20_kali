@@ -22,6 +22,12 @@ sudo ./hackberrypiq20setup.sh -g performance
 # Install optional greetd display manager
 sudo ./hackberrypiq20setup.sh -d
 
+# Preview every change without modifying anything (no root needed)
+bash ./hackberrypiq20setup.sh --dry-run
+
+# Read-only check of what is and isn't applied (run before and after)
+bash ./hackberrypiq20verify.sh
+
 # View all options
 sudo ./hackberrypiq20setup.sh -h
 ```
@@ -31,6 +37,8 @@ sudo ./hackberrypiq20setup.sh -h
 - rpi-eeprom setup
 - Service optimization
 - Power management (NVMe, CPU governor)
+- System power tuning (sysctl write batching, journald limits, WiFi power save)
+- KDE Plasma tuning (shorter animations, no blur, borderless maximized windows, 10 min auto-lock, Konsole menu bar hidden, Discover/KDE Connect autostarts hidden; skip with `-k`). Existing user settings are never overwritten
 - Networking optimization (NetworkManager + netplan)
 - Xorg display configuration
 
@@ -151,8 +159,13 @@ options nvme_core default_ps_max_latency_us=5500
 EOF
 sudo update-initramfs -u
 
+# nvme_core is built into the Pi kernel (modprobe.d options are ignored), so also set it on the cmdline
+sudo sed -i -E '1 s/[[:space:]]*$/ nvme_core.default_ps_max_latency_us=5500/' /boot/firmware/cmdline.txt
+
 sudo systemctl enable --now fstrim.timer
 ```
+
+Verify after reboot: `cat /sys/module/nvme_core/parameters/default_ps_max_latency_us` should print `5500`.
 
 ## CPU Governor Optimisation
 
@@ -176,13 +189,16 @@ The CPU governor controls CPU frequency scaling. Different governors provide dif
 **Manual configuration:**
 ```
 sudo apt install -y linux-cpupower
-sudo tee /etc/systemd/system/cpufreq-tune.sesrvice >/dev/null <<'EOF'
+sudo tee /etc/systemd/system/cpufreq-tune.service >/dev/null <<'EOF'
 [Unit]
-Description=Custom CPU frequency scaling with schedutil
+Description=Custom CPU frequency scaling with powersave
 After=multi-user.target
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
+# Make the ACT LED show CPU activity ("-" = ignore failure if the LED is absent)
+ExecStartPre=-/usr/bin/sh -c 'echo cpu | /usr/bin/tee /sys/class/leds/ACT/trigger'
 ExecStart=/usr/bin/cpupower frequency-set -g powersave
 
 [Install]
@@ -400,7 +416,7 @@ vt = 7
 # with whatever you want started, such as `sway`.
 #command = "/usr/sbin/agreety --cmd '${SHELL:-/bin/sh}'"
 # Customise the command and session hot keys to F1 and F5 to align with default Hackberry Pi CM5 keyboard layer 2
-command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-command 1 --kb-sessions 5 --cmd '${SHELL:-/bin/sh}'"
+command = "tuigreet --time --asterisks --remember-session --kb-power 12 --kb-command 1 --kb-sessions 5 --sessions /usr/share/wayland-sessions --cmd '${SHELL:-/bin/sh}'"
 # if using wlgreet
 #command = "sway --config /etc/greetd/sway-config"
 
@@ -464,6 +480,15 @@ sudo apt purge --autoremove --allow-remove-essential kali-desktop-xfce
 ```
 
 ---
+
+### KDE Tuning for the 720x720 Display
+
+The setup script applies these per-user KDE settings (only keys you haven't already set). The following are manual because they are per-desktop or browser specific:
+
+- **Tiling layout:** the default 25/50/25 columns suit widescreens, not a square. Press `Meta+T` and pick a 2x2 or 50/50 layout in the tile editor.
+- **Borderless maximized windows:** title bars are hidden when maximized to save ~30px of height. Close with `Alt+F4` or `Meta+Q`, or via the task manager.
+- **Brave:** the biggest battery lever is the browser. Enable `brave://settings/system` > Memory Saver / Efficiency mode, and set `brave://flags/#ozone-platform-hint` to Wayland.
+- **Greetd:** the tuigreet command pins `--sessions /usr/share/wayland-sessions` so the X11 Plasma session is not offered. Plasma Wayland was measured idle at ~0% CPU for `kwin_wayland` and ~0.1% for `plasmashell` on this device.
 
 ## Optional - Install Antigravity
 
