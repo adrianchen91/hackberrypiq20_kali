@@ -1,0 +1,73 @@
+#!/bin/bash
+# hackberry-touch: enable/disable the HackBerry touchscreen without touching the
+# keyboard or trackpad.
+#
+#   hackberry-touch on|off   force the touchscreen on or off
+#   hackberry-touch auto     on if the panel is lit, off if it is blanked
+#   hackberry-touch status   print "on" or "off"
+#   hackberry-touch watch    run forever, applying "auto" whenever the panel's
+#                            DPMS state changes (used by hackberry-touch.service)
+#
+# Only input devices bound to the edt_ft5x06 I2C driver (the EP0110M09 touch
+# controller) are ever inhibited. The keyboard and trackpad are USB HID devices
+# and can never match, so they cannot be disabled by this tool.
+# Inhibiting uses the kernel's standard input "inhibited" attribute: the driver
+# stays bound, so turning it back on is instant and needs no re-probe.
+
+TOUCH_DRIVER="edt_ft5x06"
+POLL_SECONDS=2
+
+touch_devices() {
+    local d drv
+    for d in /sys/class/input/input*; do
+        [[ -w "$d/inhibited" ]] || continue
+        drv=$(readlink -f "$d/device/driver" 2>/dev/null) || continue
+        [[ "${drv##*/}" == "$TOUCH_DRIVER" ]] && echo "$d"
+    done
+}
+
+set_inhibit() {
+    local value="$1" d found=1
+    for d in $(touch_devices); do
+        echo "$value" >"$d/inhibited" 2>/dev/null && found=0
+    done
+    return $found
+}
+
+# Internal panel connectors only (HDMI etc. are ignored)
+panel_state() {
+    local f seen=false
+    for f in /sys/class/drm/card*-DPI-*/dpms /sys/class/drm/card*-DSI-*/dpms /sys/class/drm/card*-eDP-*/dpms; do
+        [[ -r "$f" ]] || continue
+        seen=true
+        [[ "$(<"$f")" == "On" ]] && { echo on; return; }
+    done
+    # No panel found: fail safe and keep touch usable
+    $seen && echo off || echo on
+}
+
+case "${1:-}" in
+    on)     set_inhibit 0 ;;
+    off)    set_inhibit 1 ;;
+    auto)   [[ "$(panel_state)" == on ]] && set_inhibit 0 || set_inhibit 1 ;;
+    status)
+        d=$(touch_devices | head -n1)
+        [[ -n "$d" ]] || { echo "no touchscreen found" >&2; exit 1; }
+        [[ "$(<"$d/inhibited")" == 1 ]] && echo off || echo on
+        ;;
+    watch)
+        last=
+        while :; do
+            now=$(panel_state)
+            if [[ "$now" != "$last" ]]; then
+                "$0" auto
+                last="$now"
+            fi
+            sleep "$POLL_SECONDS"
+        done
+        ;;
+    *)
+        echo "usage: ${0##*/} on|off|auto|status|watch" >&2
+        exit 2
+        ;;
+esac

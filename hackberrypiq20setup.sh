@@ -44,6 +44,8 @@ ENABLE_BRAVE=false
 ENABLE_ANTIGRAVITY=false
 ENABLE_CLOUD_CLEANUP=false
 ENABLE_KDE_OPTIMIZATION=true
+ENABLE_TOUCH_SLEEP=true
+ONLY_TOUCH_SLEEP=false
 DRY_RUN=false
 ENABLE_CUSTOM_KERNEL=false
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -121,6 +123,8 @@ Options:
     -D, --dry-run                   Show what would change without modifying anything (no root needed)
     -K, --custom-kernel             Build (if needed), install and enable the custom 6.18 kernel from kernel/ (slow: ~30-45 min build on the CM5)
     -k, --disable-kde-opt           Skip KDE Plasma tuning (animations, blur, borderless maximized, lock, splash, Konsole, autostarts)
+    --only-touch-sleep              Run ONLY the touchscreen sleep hook step, nothing else (combine with -D to preview)
+    --disable-touch-sleep           Skip the touchscreen sleep hook (touch off while screen is blanked/suspended)
     --enable-cloud-cleanup         Enable cloud-init cleanup/optimisation (disables cloud-init services)
     -h, --help                      Display this help message
 
@@ -195,6 +199,14 @@ parse_arguments() {
                 ENABLE_KDE_OPTIMIZATION=false
                 shift
                 ;;
+            --only-touch-sleep)
+                ONLY_TOUCH_SLEEP=true
+                shift
+                ;;
+            --disable-touch-sleep)
+                ENABLE_TOUCH_SLEEP=false
+                shift
+                ;;
             --install-brave)
                 ENABLE_BRAVE=true
                 shift
@@ -261,6 +273,7 @@ display_config() {
     echo "  Antigravity Install: $ENABLE_ANTIGRAVITY"
     echo "  Cloud Cleanup: $ENABLE_CLOUD_CLEANUP"
     echo "  KDE Optimization: $ENABLE_KDE_OPTIMIZATION"
+    echo "  Touch Sleep Hook: $ENABLE_TOUCH_SLEEP"
     echo "  Custom Kernel: $ENABLE_CUSTOM_KERNEL"
     echo "  Dry Run: $DRY_RUN"
 }
@@ -1415,6 +1428,49 @@ EOF
     return 1
 }
 
+# Disable the touchscreen while the screen is blanked or the device is asleep.
+# Only the edt_ft5x06 touch controller is touched; keyboard and trackpad are never affected.
+configure_touch_sleep() {
+    if ! $ENABLE_TOUCH_SLEEP; then
+        print_warning "Touchscreen sleep hook disabled"
+        track_skip_flag "touch sleep"
+        return 0
+    fi
+
+    local src="$REPO_DIR/touchscreen"
+    local f
+    for f in hackberry-touch hackberry-touch-sleep hackberry-touch.service; do
+        if [[ ! -f "$src/$f" ]]; then
+            print_warning "Missing $src/$f, skipping touchscreen sleep hook"
+            track_failure "touch sleep"
+            return 1
+        fi
+    done
+
+    print_status "Installing touchscreen sleep/wake hook..."
+    local ok=true
+    cp "$src/hackberry-touch" /usr/local/sbin/hackberry-touch \
+        && chmod 755 /usr/local/sbin/hackberry-touch || ok=false
+    mkdir -p /usr/lib/systemd/system-sleep || ok=false
+    cp "$src/hackberry-touch-sleep" /usr/lib/systemd/system-sleep/hackberry-touch \
+        && chmod 755 /usr/lib/systemd/system-sleep/hackberry-touch || ok=false
+    cp "$src/hackberry-touch.service" /etc/systemd/system/hackberry-touch.service \
+        && chmod 644 /etc/systemd/system/hackberry-touch.service || ok=false
+
+    if $ok; then
+        systemctl daemon-reload || true
+        systemctl enable --now hackberry-touch.service \
+            || { print_warning "Failed to enable hackberry-touch.service"; ok=false; }
+    fi
+
+    if $ok; then
+        track_success
+        return 0
+    fi
+    track_failure "touch sleep"
+    return 1
+}
+
 # KDE Plasma tuning for low-power ARM hardware (applied for the invoking user)
 configure_kde_optimization() {
     if ! $ENABLE_KDE_OPTIMIZATION; then
@@ -1603,6 +1659,13 @@ main() {
     display_config
     echo ""
     
+    # Scoped run: touchscreen hook only
+    if $ONLY_TOUCH_SLEEP; then
+        configure_touch_sleep || true
+        print_summary
+        [[ $FAIL_COUNT -eq 0 ]] && exit 0 || exit 1
+    fi
+
     # Execute configuration tasks (continue even if some fail)
     configure_raspi_config || true
     configure_eeprom || true
@@ -1620,6 +1683,7 @@ main() {
     configure_kde_workaround || true
     configure_power_tuning || true
     configure_kde_optimization || true
+    configure_touch_sleep || true
     configure_wifi || true
     configure_bluetooth || true
     configure_custom_kernel || true

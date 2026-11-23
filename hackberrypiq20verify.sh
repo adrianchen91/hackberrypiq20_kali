@@ -70,6 +70,20 @@ section "System tuning (sysctl, journald, WiFi power save)"
 check "journald drop-in present" grep -q 'SystemMaxUse=100M' /etc/systemd/journald.conf.d/99-hackberry.conf
 check "NetworkManager wifi.powersave=3 drop-in present" grep -q 'wifi.powersave = 3' /etc/NetworkManager/conf.d/99-wifi-powersave.conf
 
+section "Touchscreen sleep hook"
+check "hackberry-touch helper installed" test -x /usr/local/sbin/hackberry-touch
+check "systemd-sleep hook installed" test -x /usr/lib/systemd/system-sleep/hackberry-touch
+check "hackberry-touch.service enabled" systemctl is-enabled hackberry-touch.service
+check "hackberry-touch.service active" systemctl is-active hackberry-touch.service
+for d in /sys/class/input/input*; do
+    [[ "$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)")" == "edt_ft5x06" ]] || continue
+    [[ "$(<"$d/inhibited")" == 0 ]] && ok "touchscreen currently enabled (screen on)" || warn "touchscreen currently inhibited (expected only while screen is off)"
+done
+for d in /sys/class/input/input*; do
+    grep -qi 'HACKBerryPiQ20' "$d/name" 2>/dev/null || continue
+    [[ "$(cat "$d/inhibited" 2>/dev/null)" == 1 ]] && bad "$(<"$d/name") is inhibited (keyboard/trackpad must stay on)" || ok "$(<"$d/name") not inhibited"
+done
+
 section "Networking"
 check "NetworkManager enabled" systemctl is-enabled NetworkManager
 check "NetworkManager active" systemctl is-active NetworkManager

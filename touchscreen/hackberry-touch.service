@@ -1,0 +1,14 @@
+[Unit]
+Description=Disable HackBerry touchscreen while the screen is blanked
+Documentation=file:///usr/local/sbin/hackberry-touch
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/hackberry-touch watch
+# Never leave the touchscreen dead if the watcher stops
+ExecStopPost=/usr/local/sbin/hackberry-touch on
+Restart=on-failure
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
