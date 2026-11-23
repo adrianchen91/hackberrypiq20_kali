@@ -5,12 +5,13 @@ Forward-port of the nexmon brcmfmac driver changes (seemoo-lab/nexmon, as
 packaged by Kali brcmfmac-nexmon-dkms 6.12.2) to rpi-6.18.y.
 Base: raspberrypi/linux rpi-6.18.y a40f73532 (6.18.64).
 The monitor vif is created with the legacy bsscfg:ssid method because the
-nexmon firmware crashes on the interface_create iovar.
-Compile-tested; runtime testing on the CM5 in progress.
+nexmon firmware crashes on the interface_create iovar, and gets the same
+priv_destructor as other vifs so it is freed when deleted.
+Monitor mode works with wlan0 down; with wlan0 associated the firmware halts.
 
 ---
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
-index 91082030c..04f745d1e 100644
+index 91082030c..e70707edf 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
 @@ -5,7 +5,10 @@
@@ -45,7 +46,7 @@ index 91082030c..04f745d1e 100644
  	return cfg80211_check_combinations(cfg->wiphy, &params);
  }
  
-@@ -897,6 +914,102 @@ static bool brcmf_is_ibssmode(struct brcmf_cfg80211_vif *vif)
+@@ -897,6 +914,106 @@ static bool brcmf_is_ibssmode(struct brcmf_cfg80211_vif *vif)
  	return vif->wdev.iftype == NL80211_IFTYPE_ADHOC;
  }
  
@@ -134,6 +135,10 @@ index 91082030c..04f745d1e 100644
 +		goto fail;
 +	}
 +
++	/* brcmf_net_mon_attach() does not set this (brcmf_net_attach() does); without
++	 * it the vif is never freed on delete and a second monitor vif is refused.
++	 */
++	ifp->ndev->priv_destructor = brcmf_cfg80211_free_netdev;
 +	ifp->ndev->type = ARPHRD_IEEE80211_RADIOTAP;
 +	ifp->ndev->ieee80211_ptr->iftype = NL80211_IFTYPE_MONITOR;
 +
@@ -148,7 +153,7 @@ index 91082030c..04f745d1e 100644
  /**
   * brcmf_mon_add_vif() - create monitor mode virtual interface
   *
-@@ -974,6 +1087,7 @@ static int brcmf_mon_del_vif(struct wiphy *wiphy, struct wireless_dev *wdev)
+@@ -974,6 +1091,7 @@ static int brcmf_mon_del_vif(struct wiphy *wiphy, struct wireless_dev *wdev)
  
  	return 0;
  }
@@ -156,7 +161,7 @@ index 91082030c..04f745d1e 100644
  
  static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
  						     const char *name,
-@@ -1023,6 +1137,29 @@ static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
+@@ -1023,6 +1141,29 @@ static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
  	return wdev;
  }
  
@@ -186,7 +191,7 @@ index 91082030c..04f745d1e 100644
  static void brcmf_scan_config_mpc(struct brcmf_if *ifp, int mpc)
  {
  	if (brcmf_feat_is_quirk_enabled(ifp, BRCMF_FEAT_QUIRK_NEED_MPC))
-@@ -1323,8 +1460,12 @@ int brcmf_cfg80211_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev)
+@@ -1323,8 +1464,12 @@ int brcmf_cfg80211_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev)
  	case NL80211_IFTYPE_WDS:
  	case NL80211_IFTYPE_MESH_POINT:
  		return -EOPNOTSUPP;
@@ -199,7 +204,7 @@ index 91082030c..04f745d1e 100644
  	case NL80211_IFTYPE_STATION:
  	case NL80211_IFTYPE_AP:
  		return brcmf_cfg80211_del_apsta_iface(wiphy, wdev);
-@@ -1392,6 +1533,10 @@ brcmf_cfg80211_change_iface(struct wiphy *wiphy, struct net_device *ndev,
+@@ -1392,6 +1537,10 @@ brcmf_cfg80211_change_iface(struct wiphy *wiphy, struct net_device *ndev,
  	}
  	switch (type) {
  	case NL80211_IFTYPE_MONITOR:
@@ -210,7 +215,7 @@ index 91082030c..04f745d1e 100644
  	case NL80211_IFTYPE_WDS:
  		bphy_err(drvr, "type (%d) : currently we do not support this type\n",
  			 type);
-@@ -6201,6 +6346,9 @@ static struct cfg80211_ops brcmf_cfg80211_ops = {
+@@ -6201,6 +6350,9 @@ static struct cfg80211_ops brcmf_cfg80211_ops = {
  	.crit_proto_start = brcmf_cfg80211_crit_proto_start,
  	.crit_proto_stop = brcmf_cfg80211_crit_proto_stop,
  	.tdls_oper = brcmf_cfg80211_tdls_oper,
@@ -220,7 +225,7 @@ index 91082030c..04f745d1e 100644
  	.update_connect_params = brcmf_cfg80211_update_conn_params,
  	.set_pmk = brcmf_cfg80211_set_pmk,
  	.del_pmk = brcmf_cfg80211_del_pmk,
-@@ -7802,7 +7950,13 @@ static int brcmf_setup_ifmodes(struct wiphy *wiphy, struct brcmf_if *ifp)
+@@ -7802,7 +7954,13 @@ static int brcmf_setup_ifmodes(struct wiphy *wiphy, struct brcmf_if *ifp)
  	bool mon_flag, mbss, p2p, rsdb, mchan;
  	int i, c, n_combos, n_limits;
  

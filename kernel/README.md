@@ -89,6 +89,37 @@ How it stays safe:
   (the legacy path is used regardless).
 - Whether `hackberrypi-max17048` can be replaced by mainline `max17040_battery`.
 
+## Lean profile (`build.sh --lean`)
+
+`lean.config` turns off 362 unused loadable modules (TV tuners except the RTL-SDR
+chain, gspca webcams, camera sensors, other-board audio codecs, IIO sensors,
+`fbtft` displays, cluster/server filesystems). It only removes modules: the kernel
+image is identical to the full build (same 111,536 built-in symbols, same version
+tag), and `build.sh --lean` refuses to build if a built-in option would change or a
+required driver (display, HDMI audio, Bluetooth, wireless, serial, CAN, battery, touch)
+would be dropped.
+
+Measured on the CM5: full build 173 min, lean rebuild 68 min with a warm `ccache`
+(1,917 -> 1,555 modules, image deb 40 MB -> 37 MB).
+
+`./kernel/check-hardware.sh` lists every module this device actually uses (loaded,
+bound in sysfs, or matched by a device alias) and checks each against a package.
+Run it while a full kernel is running, before installing a lean one.
+
+### Restoring a module without rebuilding
+
+Because the lean image equals the full one, a module from a full build loads into it:
+
+```bash
+cd /tmp && dpkg-deb -x ~/path/to/kernel/build/baseline-full/linux-image-*.deb full
+sudo install -D full/lib/modules/*/kernel/drivers/media/usb/gspca/gspca_main.ko.zst \
+     /lib/modules/$(uname -r)/extra/gspca_main.ko.zst   # repeat for the module and its dependencies
+sudo depmod -a && sudo modprobe gspca_main
+```
+
+A module built against a different core is refused with a version-mismatch error,
+never loaded unsafely. Keep `kernel/build/baseline-full` (git-ignored) as the source.
+
 ## Updating the kernel
 
 1. `./kernel/build.sh --update`, boot-test it.

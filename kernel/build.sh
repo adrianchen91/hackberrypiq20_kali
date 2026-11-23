@@ -11,6 +11,8 @@
 #   --deps-only     install the build dependencies and exit
 #   --jobs N        parallel jobs (default: nproc)
 #   --config-only   fetch, patch and configure, then stop (no compile)
+#   --lean          also merge lean.config (turns off unused loadable modules only;
+#                   checked so no built-in option changes and key hardware stays)
 #   --menuconfig    open menuconfig after the fragment is merged, then continue
 #   --update        build the current tip of KERNEL_BRANCH instead of the pinned
 #                   KERNEL_SHA and print the SHA (then pin it in kernel.conf)
@@ -25,7 +27,7 @@ source "$HERE/kernel.conf"
 SRC="$HERE/build/linux"
 OUT="$HERE/out"
 JOBS="$(nproc)"
-INSTALL_DEPS=false DEPS_ONLY=false CONFIG_ONLY=false MENUCONFIG=false UPDATE=false CLEAN=false
+INSTALL_DEPS=false DEPS_ONLY=false LEAN=false CONFIG_ONLY=false MENUCONFIG=false UPDATE=false CLEAN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -33,10 +35,11 @@ while [[ $# -gt 0 ]]; do
         --deps-only) INSTALL_DEPS=true; DEPS_ONLY=true; shift ;;
         --jobs) JOBS="$2"; shift 2 ;;
         --config-only) CONFIG_ONLY=true; shift ;;
+        --lean) LEAN=true; shift ;;
         --menuconfig) MENUCONFIG=true; shift ;;
         --update) UPDATE=true; shift ;;
         --clean) CLEAN=true; shift ;;
-        -h|--help) sed -n '3,18p' "$0"; exit 0 ;;
+        -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -115,6 +118,41 @@ info "Configuring (bcm2712_defconfig + hackberry.config)"
 make -s "${CC_ARGS[@]}" bcm2712_defconfig
 scripts/kconfig/merge_config.sh -m .config "$HERE/hackberry.config" >/dev/null
 make -s "${CC_ARGS[@]}" olddefconfig
+
+# --- lean profile: turn off unused loadable modules, never built-in code ------
+if $LEAN; then
+    info "Applying lean.config"
+    cp .config "$SRC/.config.full"
+    scripts/kconfig/merge_config.sh -m .config "$HERE/lean.config" >/dev/null
+    make -s "${CC_ARGS[@]}" olddefconfig
+
+    # 1. Nothing built-in may change, except sub-options of removed modules that
+    #    lean.config explicitly allows (the kernel image must stay identical so
+    #    modules from a full build still load).
+    allow=$(sed -n 's/^# allow-y-change: *//p' "$HERE/lean.config")
+    viol=0
+    while IFS= read -r line; do
+        grep -qxF "$line" .config && continue
+        key="${line%%=*}"; key="${key#CONFIG_}"
+        ok=false
+        for pfx in $allow; do [[ "$key" == "$pfx"* ]] && ok=true; done
+        $ok || { warn "lean changed a built-in option: $line"; viol=1; }
+    done < <(grep '=y$' "$SRC/.config.full")
+    [[ $viol -eq 0 ]] || die "lean.config would change built-in options (see above)"
+
+    # 2. Hardware and features this device relies on must survive
+    for k in DRM_VC4 SND_SOC SND_SOC_HDMI_CODEC SND_USB_AUDIO BT BT_BREDR BT_RFCOMM BT_BNEP BT_HIDP \
+             BT_HCIUART BT_HCIUART_BCM BT_HCIBTUSB BATTERY_MAX17040 TOUCHSCREEN_EDT_FT5X06 BRCMFMAC \
+             RTW88 RTW89 MT7921U RT2800USB ATH9K_HTC RTL8XXXU USB_VIDEO_CLASS USB_SERIAL_FTDI_SIO \
+             USB_SERIAL_CP210X USB_GADGET CAN DVB_USB_RTL28XXU DVB_RTL2832_SDR NF_TABLES; do
+        want=$(grep -E "^CONFIG_${k}=" "$SRC/.config.full" | head -1)
+        have=$(grep -E "^CONFIG_${k}=" .config | head -1)
+        [[ -z "$want" || "$want" == "$have" ]] || die "lean dropped required option: $k"
+    done
+    nm_full=$(grep -c '=m$' "$SRC/.config.full"); nm_lean=$(grep -c '=m$' .config)
+    info "Lean: modules $nm_full -> $nm_lean (built-in options unchanged, required hardware kept)"
+    rm -f "$SRC/.config.full"
+fi
 $MENUCONFIG && make "${CC_ARGS[@]}" menuconfig
 
 # Every explicit line in the fragment must have survived olddefconfig
