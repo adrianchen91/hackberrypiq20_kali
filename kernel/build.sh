@@ -138,7 +138,7 @@ if $CONFIG_ONLY; then
 fi
 
 # --- build -------------------------------------------------------------------
-info "Building with -j$JOBS (expect 25-45 min on a CM5 the first time)"
+info "Building with -j$JOBS (first full build took 174 min on a CM5 with -j4; ccache makes rebuilds much faster)"
 start=$SECONDS
 make -j"$JOBS" "${CC_ARGS[@]}" LOCALVERSION= KDEB_PKGVERSION="$(make -s kernelversion)-1hackberry" bindeb-pkg
 info "Build finished in $(( (SECONDS - start) / 60 )) min"
@@ -147,7 +147,7 @@ info "Build finished in $(( (SECONDS - start) / 60 )) min"
 rm -f "$OUT"/*.deb
 mv ../linux-image-*.deb ../linux-headers-*.deb "$OUT"/
 rm -f ../linux-libc-dev_*.deb ../linux-image-*-dbg_*.deb ../*.buildinfo ../*.changes
-cp .config "$OUT/config-$(make -s kernelrelease)"
+cp .config "$OUT/config-$(make -s LOCALVERSION= kernelrelease | tr -d +)"
 echo "$TARGET" > "$OUT/KERNEL_SHA"
 
 info "Packages in $OUT:"

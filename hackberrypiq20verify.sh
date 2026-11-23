@@ -167,6 +167,16 @@ else
     fi
 fi
 
+section "Hardware watchdog"
+check "watchdog drop-in present" grep -q 'RuntimeWatchdogSec=15' /etc/systemd/system.conf.d/99-hackberry-watchdog.conf
+if [[ -e /dev/watchdog0 ]]; then
+    ok "/dev/watchdog0 present ($(cat /sys/class/watchdog/watchdog0/identity 2>/dev/null))"
+    wd=$(systemctl show -p RuntimeWatchdogUSec --value 2>/dev/null)
+    [[ "$wd" == "15s" ]] && ok "systemd RuntimeWatchdog is $wd" || bad "systemd RuntimeWatchdog is '${wd:-n/a}' (expected 15s; run systemctl daemon-reexec or reboot)"
+else
+    warn "no /dev/watchdog0"
+fi
+
 section "Custom kernel (optional, setup -K)"
 if grep -q '^# hackberry-kernel-begin' /boot/firmware/config.txt 2>/dev/null; then
     prefix=$(sed -n 's/^os_prefix=//p' /boot/firmware/config.txt | tail -1)

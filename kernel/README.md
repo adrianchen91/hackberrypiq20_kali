@@ -35,7 +35,7 @@ is in `kernel/out/` and only build when it is empty.
 
 ```bash
 ./kernel/build.sh --install-deps        # first time
-./kernel/build.sh                       # 25-45 min on a CM5 (estimate)
+./kernel/build.sh                       # first full build: 174 min on a CM5 (measured), ccache rebuilds are much faster
 ./kernel/build.sh --config-only         # check the merged config quickly
 ./kernel/build.sh --menuconfig          # tweak interactively
 ./kernel/build.sh --update              # build the current branch tip instead of the pin
@@ -68,14 +68,26 @@ How it stays safe:
 - Re-run `install.sh` after changing `/boot/firmware/cmdline.txt` so the staged
   copy follows.
 
-## Unverified until first boot
+## Verified on the device (6.18.64-hackberry-2712)
 
-- `os_prefix` handling of overlays and `auto_initramfs` on the CM5 bootloader.
-- Whether the `dtoverlay=hackberrypicm5` overlay and the `hackberrypi-max17048`
-  DKMS module work on 6.18 (mainline `max17040_battery` supports MAX17048 and may
-  replace the DKMS module).
-- The `/etc/dkms/brcmfmac-nexmon.conf` override being honoured.
-- Nexmon monitor mode and injection at runtime.
+- Boots through `os_prefix` with 16K pages; display, touch, keyboard, battery and
+  WiFi come up; the `/etc/dkms/brcmfmac-nexmon.conf` override is honoured.
+- Nexmon monitor mode: `mon0` comes up, `set channel` works and frames are
+  captured (198 frames in one 12 s test) **only when `wlan0` is down**. With
+  `wlan0` associated, bringing `mon0` up makes the firmware halt (about 130 ms
+  after `SET_MONITOR 2`), and the driver reloads it. Power save was ruled out.
+  Take `wlan0` down first (`nmcli dev set wlan0 managed no; ip link set wlan0 down`),
+  as `airmon-ng start wlan0` does.
+- The monitor vif is created with the legacy `bsscfg:ssid` method (see the patch).
+  The fix is in `patches/0001-brcmfmac-nexmon.patch`; the installed packages in
+  `kernel/out/` predate it until the kernel is rebuilt.
+
+## Not yet verified
+
+- Packet injection.
+- Whether the upstream `interface_create` path would also work with `wlan0` down
+  (the legacy path is used regardless).
+- Whether `hackberrypi-max17048` can be replaced by mainline `max17040_battery`.
 
 ## Updating the kernel
 

@@ -86,7 +86,7 @@ Debug
 
 Status: scaffolded in `kernel/` (see `kernel/README.md`): `build.sh`, `install.sh`, `kernel.conf`, `hackberry.config`, `-K` in the setup script and a verify section. The config fragment was checked against 6.18 (no drift); the full build, install and boot are untested. The notes below are the original design.
 
-Build time on the CM5 (4x Cortex-A76 at 2.4 GHz, 16 GB RAM; estimate, not measured): about 25-45 min for a full `bcm2712_defconfig` build at `-j4`, about 15-25 min with the trimmed config from Phase 4, and a few minutes for incremental rebuilds with `ccache`. `bindeb-pkg` adds a few minutes. Needs about 10 GB free disk and runs hot, so use the heatsink/fan. We will record the real number on the first build and decide then whether a remote build is worth it.
+Build time on the CM5 (4x Cortex-A76 at 2.4 GHz, 16 GB RAM): measured 174 minutes for the first full `bcm2712_defconfig` build at `-j4` (about 9,500 objects, 1,922 modules, 40 MB image deb). The earlier 25-45 minute estimate was wrong. A lean profile that drops unused DVB/webcam/NIC/filesystem drivers would cut this substantially; `ccache` makes rebuilds after small changes fast. Needs about 10 GB free disk and runs hot.
 
 Deployment without publishing packages: the repo carries the recipe (pinned SHA, config fragment, patches) and the setup script gets a `-K` mode that (1) installs build deps, (2) reuses `kernel/out/*.deb` if present, otherwise builds on-device, (3) installs the debs, copies DTBs/overlays, sets `kernel=` in `config.txt`, removes the nexmon/battery DKMS packages that the kernel now replaces, and (4) leaves 6.12 as a fallback entry. Copying a prebuilt `kernel/out/` from another machine to a fresh CM5 skips the build entirely.
 

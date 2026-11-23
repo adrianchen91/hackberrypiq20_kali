@@ -46,6 +46,7 @@ ENABLE_CLOUD_CLEANUP=false
 ENABLE_KDE_OPTIMIZATION=true
 ENABLE_TOUCH_SLEEP=true
 ONLY_TOUCH_SLEEP=false
+ENABLE_WATCHDOG=true
 DRY_RUN=false
 ENABLE_CUSTOM_KERNEL=false
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -121,8 +122,9 @@ Options:
     --install-brave                Install Brave browser
     --install-antigravity          Install Antigravity package and repository
     -D, --dry-run                   Show what would change without modifying anything (no root needed)
-    -K, --custom-kernel             Build (if needed), install and enable the custom 6.18 kernel from kernel/ (slow: ~30-45 min build on the CM5)
+    -K, --custom-kernel             Build (if needed), install and enable the custom 6.18 kernel from kernel/ (slow: ~3 h first build on the CM5)
     -k, --disable-kde-opt           Skip KDE Plasma tuning (animations, blur, borderless maximized, lock, splash, Konsole, autostarts)
+    --disable-watchdog              Skip the systemd hardware watchdog (auto-reset if the whole system hangs)
     --only-touch-sleep              Run ONLY the touchscreen sleep hook step, nothing else (combine with -D to preview)
     --disable-touch-sleep           Skip the touchscreen sleep hook (touch off while screen is blanked/suspended)
     --enable-cloud-cleanup         Enable cloud-init cleanup/optimisation (disables cloud-init services)
@@ -197,6 +199,10 @@ parse_arguments() {
                 ;;
             -k|--disable-kde-opt)
                 ENABLE_KDE_OPTIMIZATION=false
+                shift
+                ;;
+            --disable-watchdog)
+                ENABLE_WATCHDOG=false
                 shift
                 ;;
             --only-touch-sleep)
@@ -274,6 +280,7 @@ display_config() {
     echo "  Cloud Cleanup: $ENABLE_CLOUD_CLEANUP"
     echo "  KDE Optimization: $ENABLE_KDE_OPTIMIZATION"
     echo "  Touch Sleep Hook: $ENABLE_TOUCH_SLEEP"
+    echo "  Hardware Watchdog: $ENABLE_WATCHDOG"
     echo "  Custom Kernel: $ENABLE_CUSTOM_KERNEL"
     echo "  Dry Run: $DRY_RUN"
 }
@@ -1428,6 +1435,40 @@ EOF
     return 1
 }
 
+# Let systemd feed the SoC hardware watchdog so a fully hung system resets itself.
+# Catches kernel lockups and a stuck PID 1; it does not catch a frozen desktop or one stuck service.
+configure_watchdog() {
+    if ! $ENABLE_WATCHDOG; then
+        print_warning "Hardware watchdog disabled"
+        track_skip_flag "watchdog"
+        return 0
+    fi
+
+    if [[ ! -e /dev/watchdog0 ]]; then
+        print_warning "No /dev/watchdog0 (kernel without bcm2835 watchdog?), skipping"
+        track_skip "watchdog"
+        return 0
+    fi
+
+    print_status "Enabling systemd hardware watchdog (15s runtime, 2min reboot)..."
+    mkdir -p /etc/systemd/system.conf.d
+    if ! tee /etc/systemd/system.conf.d/99-hackberry-watchdog.conf >/dev/null <<'EOF'
+[Manager]
+# systemd pings the hardware timer; if PID 1 or the kernel hangs the board resets
+RuntimeWatchdogSec=15
+# A reboot that hangs is forced after 2 minutes
+RebootWatchdogSec=2min
+EOF
+    then
+        print_warning "Failed to write watchdog configuration"
+        track_failure "watchdog"
+        return 1
+    fi
+    systemctl daemon-reexec 2>/dev/null || print_warning "Failed to re-exec systemd (applies on next boot)"
+    track_success
+    return 0
+}
+
 # Disable the touchscreen while the screen is blanked or the device is asleep.
 # Only the edt_ft5x06 touch controller is touched; keyboard and trackpad are never affected.
 configure_touch_sleep() {
@@ -1615,7 +1656,7 @@ configure_custom_kernel() {
             track_success
             return 0
         fi
-        print_warning "No prebuilt kernel in kernel/out; building on this device (30-45 min, needs ~10 GB)"
+        print_warning "No prebuilt kernel in kernel/out; building on this device (about 3 hours, needs ~10 GB)"
         local build_user="${SUDO_USER:-root}"
         # Dependencies as root, the build itself as the invoking user so kernel/ stays user-owned
         if ! "$kdir/build.sh" --deps-only || ! sudo -H -u "$build_user" "$kdir/build.sh"; then
@@ -1682,6 +1723,7 @@ main() {
     configure_antigravity || true
     configure_kde_workaround || true
     configure_power_tuning || true
+    configure_watchdog || true
     configure_kde_optimization || true
     configure_touch_sleep || true
     configure_wifi || true
