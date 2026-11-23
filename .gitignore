@@ -158,3 +158,6 @@ $RECYCLE.BIN/
 *.tmp
 *.temp
 .cache/
+# Custom kernel build tree and packages (see kernel/README.md)
+kernel/build/
+kernel/out/

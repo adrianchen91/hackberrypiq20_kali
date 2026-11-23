@@ -45,6 +45,8 @@ ENABLE_ANTIGRAVITY=false
 ENABLE_CLOUD_CLEANUP=false
 ENABLE_KDE_OPTIMIZATION=true
 DRY_RUN=false
+ENABLE_CUSTOM_KERNEL=false
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ################################################################################
 # Functions
@@ -117,6 +119,7 @@ Options:
     --install-brave                Install Brave browser
     --install-antigravity          Install Antigravity package and repository
     -D, --dry-run                   Show what would change without modifying anything (no root needed)
+    -K, --custom-kernel             Build (if needed), install and enable the custom 6.18 kernel from kernel/ (slow: ~30-45 min build on the CM5)
     -k, --disable-kde-opt           Skip KDE Plasma tuning (animations, blur, borderless maximized, lock, splash, Konsole, autostarts)
     --enable-cloud-cleanup         Enable cloud-init cleanup/optimisation (disables cloud-init services)
     -h, --help                      Display this help message
@@ -182,6 +185,10 @@ parse_arguments() {
                 ;;
             -D|--dry-run)
                 DRY_RUN=true
+                shift
+                ;;
+            -K|--custom-kernel)
+                ENABLE_CUSTOM_KERNEL=true
                 shift
                 ;;
             -k|--disable-kde-opt)
@@ -254,6 +261,7 @@ display_config() {
     echo "  Antigravity Install: $ENABLE_ANTIGRAVITY"
     echo "  Cloud Cleanup: $ENABLE_CLOUD_CLEANUP"
     echo "  KDE Optimization: $ENABLE_KDE_OPTIMIZATION"
+    echo "  Custom Kernel: $ENABLE_CUSTOM_KERNEL"
     echo "  Dry Run: $DRY_RUN"
 }
 
@@ -1529,6 +1537,52 @@ EOF
     return 1
 }
 
+# Build (if needed), install and enable the custom kernel from kernel/
+configure_custom_kernel() {
+    if ! $ENABLE_CUSTOM_KERNEL; then
+        track_skip_flag "custom kernel"
+        return 0
+    fi
+
+    local kdir="$REPO_DIR/kernel"
+    if [[ ! -x "$kdir/install.sh" || ! -x "$kdir/build.sh" ]]; then
+        print_error "kernel/ build scripts not found in $REPO_DIR"
+        track_failure "custom kernel"
+        return 1
+    fi
+
+    local debs=("$kdir"/out/linux-image-*.deb)
+    if [[ ! -e "${debs[0]}" ]]; then
+        if $DRY_RUN; then
+            dry_note "would run: kernel/build.sh --deps-only, then kernel/build.sh (no prebuilt packages in kernel/out)"
+            dry_note "would run: kernel/install.sh --enable"
+            track_success
+            return 0
+        fi
+        print_warning "No prebuilt kernel in kernel/out; building on this device (30-45 min, needs ~10 GB)"
+        local build_user="${SUDO_USER:-root}"
+        # Dependencies as root, the build itself as the invoking user so kernel/ stays user-owned
+        if ! "$kdir/build.sh" --deps-only || ! sudo -H -u "$build_user" "$kdir/build.sh"; then
+            print_error "Kernel build failed"
+            track_failure "custom kernel"
+            return 1
+        fi
+    else
+        print_status "Using prebuilt kernel packages from kernel/out"
+    fi
+
+    local args=(--enable)
+    $DRY_RUN && args+=(--dry-run)
+    if bash "$kdir/install.sh" "${args[@]}"; then
+        print_status "Custom kernel installed; reboot to use it (rollback: kernel/install.sh --disable)"
+        track_success
+        return 0
+    fi
+    print_error "Custom kernel install failed"
+    track_failure "custom kernel"
+    return 1
+}
+
 # Main execution
 main() {
     print_status "Starting HackBerry Pi CM5 Q20 Setup Script"
@@ -1568,6 +1622,7 @@ main() {
     configure_kde_optimization || true
     configure_wifi || true
     configure_bluetooth || true
+    configure_custom_kernel || true
     
     # Print summary
     print_summary

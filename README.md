@@ -46,6 +46,7 @@ sudo ./hackberrypiq20setup.sh -h
 - Fstab noatime optimization (`-f`)
 - Greetd display manager (`-d`)
 - Device tree compilation (`-t`)
+- Custom Raspberry Pi 6.18 kernel with nexmon patch (`-K`, see [kernel/README.md](kernel/README.md); builds on the device if no prebuilt packages are in `kernel/out/`)
 
 ---
 

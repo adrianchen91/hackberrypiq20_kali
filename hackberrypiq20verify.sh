@@ -153,6 +153,32 @@ else
     fi
 fi
 
+section "Custom kernel (optional, setup -K)"
+if grep -q '^# hackberry-kernel-begin' /boot/firmware/config.txt 2>/dev/null; then
+    prefix=$(sed -n 's/^os_prefix=//p' /boot/firmware/config.txt | tail -1)
+    ok "config.txt selects custom kernel (os_prefix=$prefix)"
+    for f in kernel_2712.img cmdline.txt overlays/hackberrypicm5.dtbo; do
+        check "/boot/firmware/${prefix}$f present" test -f "/boot/firmware/${prefix}$f"
+    done
+    ls /boot/firmware/"${prefix}"bcm2712*.dtb &>/dev/null && ok "bcm2712 dtbs staged" || bad "no bcm2712 dtbs in /boot/firmware/${prefix}"
+    cmp -s /boot/firmware/cmdline.txt "/boot/firmware/${prefix}cmdline.txt" && ok "staged cmdline.txt matches stock" \
+        || warn "staged cmdline.txt differs from /boot/firmware/cmdline.txt (re-run kernel/install.sh)"
+    case "$(uname -r)" in
+        *-hackberry-*)
+            ok "running custom kernel $(uname -r)"
+            [[ "$(getconf PAGESIZE)" == "16384" ]] && ok "16K page size" || bad "page size is $(getconf PAGESIZE), expected 16384"
+            [[ -d /sys/class/power_supply ]] && ls /sys/class/power_supply | grep -qi 'max1704\|battery' \
+                && ok "battery power_supply present" || warn "no battery power_supply (overlay/driver for this kernel?)"
+            modinfo -F version brcmfmac 2>/dev/null | grep -q nexmon && ok "brcmfmac is the nexmon build" || warn "brcmfmac is not the nexmon build"
+            [[ -e /sys/class/net/wlan0 ]] && ok "wlan0 present" || bad "wlan0 missing (brcmfmac failed to load?)"
+            dmesg 2>/dev/null | grep -qiE 'brcmf.*(firmware.*(fail|error)|timeout)' && warn "brcmfmac errors in dmesg" || ok "no brcmfmac firmware errors in dmesg"
+            ;;
+        *) warn "os_prefix is set but running $(uname -r) (reboot, or the bootloader fell back)" ;;
+    esac
+else
+    skip "custom kernel not enabled (running $(uname -r))"
+fi
+
 echo
 echo "================================================================"
 echo "Verification: $PASS passed, $FAIL failed, $WARN warnings"
