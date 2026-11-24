@@ -91,11 +91,14 @@ How it stays safe:
 
 ## Lean profile (`build.sh --lean`)
 
-`lean.config` turns off 362 unused loadable modules (TV tuners except the RTL-SDR
-chain, gspca webcams, camera sensors, other-board audio codecs, IIO sensors,
-`fbtft` displays, cluster/server filesystems). It only removes modules: the kernel
-image is identical to the full build (same 111,536 built-in symbols, same version
-tag), and `build.sh --lean` refuses to build if a built-in option would change or a
+`lean.config` turns off unused loadable modules (TV tuners except the RTL-SDR chain,
+gspca webcams, camera sensors, other-board audio codecs and Pi audio HATs, IIO sensors,
+`fbtft` displays, cluster/server and legacy/flash filesystems, PCIe-only WiFi and NICs,
+software RAID, IPVS/batman/OVS/SCTP/L2TP, usbip). USB WiFi adapters, WireGuard,
+netfilter, XFS, btrfs, NFS and SMB are kept. The kernel image is the full build's image
+apart from a few small built-in sub-options that only existed for the removed modules
+(`CLOSURES`, `PLDMFW`, `SND_SOC_COMPRESS`, `MD_BITMAP`, ...; listed in `allow-y-change`).
+`build.sh --lean` refuses to build if any other built-in option would change or a
 required driver (display, HDMI audio, Bluetooth, wireless, serial, CAN, battery, touch)
 would be dropped.
 
@@ -108,7 +111,8 @@ Run it while a full kernel is running, before installing a lean one.
 
 ### Restoring a module without rebuilding
 
-Because the lean image equals the full one, a module from a full build loads into it:
+A module from a full build loads into a lean image when its core matches (modules that
+depend on the allow-listed sub-options, such as bcache, will be refused):
 
 ```bash
 cd /tmp && dpkg-deb -x ~/path/to/kernel/build/baseline-full/linux-image-*.deb full
