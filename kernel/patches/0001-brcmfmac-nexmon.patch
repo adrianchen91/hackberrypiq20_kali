@@ -138,7 +138,7 @@ index 91082030c..e70707edf 100644
 +	/* brcmf_net_mon_attach() does not set this (brcmf_net_attach() does); without
 +	 * it the vif is never freed on delete and a second monitor vif is refused.
 +	 */
-+	ifp->ndev->priv_destructor = brcmf_cfg80211_free_netdev;
++	ifp->ndev->priv_destructor = brcmf_cfg80211_free_vif;
 +	ifp->ndev->type = ARPHRD_IEEE80211_RADIOTAP;
 +	ifp->ndev->ieee80211_ptr->iftype = NL80211_IFTYPE_MONITOR;
 +
