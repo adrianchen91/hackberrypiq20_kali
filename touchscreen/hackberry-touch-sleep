@@ -1,7 +1,7 @@
 #!/bin/sh
 # systemd-sleep hook: touchscreen off before suspend/hibernate, restored on resume.
-# On resume "auto" is used so touch stays off if the panel is still blanked
-# (hackberry-touch.service then re-enables it when the screen lights up).
+# On resume "auto" is used: touch stays off if the session is locked (KDE locks on
+# suspend) and hackberry-touch.service re-enables it when you unlock.
 # Never touches the keyboard or trackpad. Always exits 0 so it cannot block sleep.
 case "$1" in
     pre)  /usr/local/sbin/hackberry-touch off  || true ;;

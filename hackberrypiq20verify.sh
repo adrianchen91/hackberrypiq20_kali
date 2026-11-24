@@ -77,7 +77,7 @@ check "hackberry-touch.service enabled" systemctl is-enabled hackberry-touch.ser
 check "hackberry-touch.service active" systemctl is-active hackberry-touch.service
 for d in /sys/class/input/input*; do
     [[ "$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)")" == "edt_ft5x06" ]] || continue
-    [[ "$(<"$d/inhibited")" == 0 ]] && ok "touchscreen currently enabled (screen on)" || warn "touchscreen currently inhibited (expected only while screen is off)"
+    [[ "$(<"$d/inhibited")" == 0 ]] && ok "touchscreen currently enabled (session unlocked)" || warn "touchscreen currently inhibited (expected only while the session is locked or suspended)"
 done
 for d in /sys/class/input/input*; do
     grep -qi 'HACKBerryPiQ20' "$d/name" 2>/dev/null || continue

@@ -40,7 +40,7 @@ sudo ./hackberrypiq20setup.sh -h
 - Hardware watchdog (systemd feeds the BCM2835 watchdog; resets a fully hung system after 15s; skip with `--disable-watchdog`)
 - System power tuning (sysctl write batching, journald limits, WiFi power save)
 - KDE Plasma tuning (shorter animations, no blur, borderless maximized windows, 10 min auto-lock, Konsole menu bar hidden, Discover/KDE Connect autostarts hidden; skip with `-k`). Existing user settings are never overwritten
-- Touchscreen sleep hook (touch is disabled while the screen is blanked or the device is suspended and re-enabled when the screen is back on; keyboard and trackpad are never touched; skip with `--disable-touch-sleep`)
+- Touchscreen sleep hook (touch is disabled while the session is locked or the device is suspended and re-enabled on unlock (event-driven via logind, no polling); keyboard and trackpad are never touched; skip with `--disable-touch-sleep`)
 - Networking optimization (NetworkManager + netplan)
 - Xorg display configuration
 
