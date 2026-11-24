@@ -24,7 +24,7 @@ index 91082030c..e70707edf 100644
 +#include <linux/version.h>
  #include <linux/etherdevice.h>
  #include <linux/module.h>
- #include <linux/vmalloc.h>
+ #include <linux/unaligned.h>
 @@ -527,6 +530,20 @@ static int brcmf_vif_add_validate(struct brcmf_cfg80211_info *cfg,
  		params.iftype_num[pos->wdev.iftype]++;
  

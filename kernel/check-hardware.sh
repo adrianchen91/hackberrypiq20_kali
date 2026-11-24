@@ -8,7 +8,7 @@
 #              without one, against the modules removed by lean.config.
 # Usage: ./kernel/check-hardware.sh [--deb PATH]      (default: kernel/out image deb)
 # Run it on the device you care about while it runs a FULL kernel (the stock 6.12 or
-# the full 6.18 build), with display, touch, keyboard, audio and Bluetooth in use, so
+# the full 7.3 build), with display, touch, keyboard, audio and Bluetooth in use, so
 # the module list reflects everything it needs. Needs no root.
 ################################################################################
 set -u
