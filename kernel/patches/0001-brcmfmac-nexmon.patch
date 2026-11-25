@@ -8,10 +8,12 @@ The monitor vif is created with the legacy bsscfg:ssid method because the
 nexmon firmware crashes on the interface_create iovar, and gets the same
 priv_destructor as other vifs so it is freed when deleted.
 Monitor mode works with wlan0 down; with wlan0 associated the firmware halts.
+The monitor netdev transmits through brcmf_netdev_start_xmit (as in the 6.12 DKMS)
+instead of upstream's stub that frees every frame, so injected frames reach the firmware.
 
 ---
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
-index 91082030c..e70707edf 100644
+index 4943f5c62c..19ee4f16a1 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
 @@ -5,7 +5,10 @@
@@ -25,7 +27,7 @@ index 91082030c..e70707edf 100644
  #include <linux/etherdevice.h>
  #include <linux/module.h>
  #include <linux/unaligned.h>
-@@ -527,6 +530,20 @@ static int brcmf_vif_add_validate(struct brcmf_cfg80211_info *cfg,
+@@ -528,6 +531,20 @@ static int brcmf_vif_add_validate(struct brcmf_cfg80211_info *cfg,
  		params.iftype_num[pos->wdev.iftype]++;
  
  	params.iftype_num[new_type]++;
@@ -46,7 +48,7 @@ index 91082030c..e70707edf 100644
  	return cfg80211_check_combinations(cfg->wiphy, &params);
  }
  
-@@ -897,6 +914,106 @@ static bool brcmf_is_ibssmode(struct brcmf_cfg80211_vif *vif)
+@@ -898,6 +915,106 @@ static bool brcmf_is_ibssmode(struct brcmf_cfg80211_vif *vif)
  	return vif->wdev.iftype == NL80211_IFTYPE_ADHOC;
  }
  
@@ -153,7 +155,7 @@ index 91082030c..e70707edf 100644
  /**
   * brcmf_mon_add_vif() - create monitor mode virtual interface
   *
-@@ -974,6 +1091,7 @@ static int brcmf_mon_del_vif(struct wiphy *wiphy, struct wireless_dev *wdev)
+@@ -975,6 +1092,7 @@ static int brcmf_mon_del_vif(struct wiphy *wiphy, struct wireless_dev *wdev)
  
  	return 0;
  }
@@ -161,7 +163,7 @@ index 91082030c..e70707edf 100644
  
  static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
  						     const char *name,
-@@ -1023,6 +1141,29 @@ static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
+@@ -1024,6 +1142,29 @@ static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
  	return wdev;
  }
  
@@ -191,7 +193,7 @@ index 91082030c..e70707edf 100644
  static void brcmf_scan_config_mpc(struct brcmf_if *ifp, int mpc)
  {
  	if (brcmf_feat_is_quirk_enabled(ifp, BRCMF_FEAT_QUIRK_NEED_MPC))
-@@ -1323,8 +1464,12 @@ int brcmf_cfg80211_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev)
+@@ -1324,8 +1465,12 @@ int brcmf_cfg80211_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev)
  	case NL80211_IFTYPE_WDS:
  	case NL80211_IFTYPE_MESH_POINT:
  		return -EOPNOTSUPP;
@@ -204,7 +206,7 @@ index 91082030c..e70707edf 100644
  	case NL80211_IFTYPE_STATION:
  	case NL80211_IFTYPE_AP:
  		return brcmf_cfg80211_del_apsta_iface(wiphy, wdev);
-@@ -1392,6 +1537,10 @@ brcmf_cfg80211_change_iface(struct wiphy *wiphy, struct net_device *ndev,
+@@ -1393,6 +1538,10 @@ brcmf_cfg80211_change_iface(struct wiphy *wiphy, struct net_device *ndev,
  	}
  	switch (type) {
  	case NL80211_IFTYPE_MONITOR:
@@ -215,7 +217,7 @@ index 91082030c..e70707edf 100644
  	case NL80211_IFTYPE_WDS:
  		bphy_err(drvr, "type (%d) : currently we do not support this type\n",
  			 type);
-@@ -6201,6 +6350,9 @@ static struct cfg80211_ops brcmf_cfg80211_ops = {
+@@ -6227,6 +6376,9 @@ static struct cfg80211_ops brcmf_cfg80211_ops = {
  	.crit_proto_start = brcmf_cfg80211_crit_proto_start,
  	.crit_proto_stop = brcmf_cfg80211_crit_proto_stop,
  	.tdls_oper = brcmf_cfg80211_tdls_oper,
@@ -225,7 +227,7 @@ index 91082030c..e70707edf 100644
  	.update_connect_params = brcmf_cfg80211_update_conn_params,
  	.set_pmk = brcmf_cfg80211_set_pmk,
  	.del_pmk = brcmf_cfg80211_del_pmk,
-@@ -7802,7 +7954,13 @@ static int brcmf_setup_ifmodes(struct wiphy *wiphy, struct brcmf_if *ifp)
+@@ -7846,7 +7998,13 @@ static int brcmf_setup_ifmodes(struct wiphy *wiphy, struct brcmf_if *ifp)
  	bool mon_flag, mbss, p2p, rsdb, mchan;
  	int i, c, n_combos, n_limits;
  
@@ -240,7 +242,7 @@ index 91082030c..e70707edf 100644
  	p2p = brcmf_feat_is_enabled(ifp, BRCMF_FEAT_P2P);
  	rsdb = brcmf_feat_is_enabled(ifp, BRCMF_FEAT_RSDB);
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
-index 456982e63..74c35e020 100644
+index 9cf894d06e..14248a14d7 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
 @@ -26,6 +26,7 @@
@@ -252,7 +254,7 @@ index 456982e63..74c35e020 100644
  #define BRCMF_DEFAULT_SCAN_CHANNEL_TIME	40
  #define BRCMF_DEFAULT_SCAN_UNASSOC_TIME	40
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/core.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/core.c
-index 49f94fd34..d2d65597e 100644
+index 080c9c9293..dc380a3260 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/core.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/core.c
 @@ -7,7 +7,6 @@
@@ -397,7 +399,30 @@ index 49f94fd34..d2d65597e 100644
  	err = brcmf_fil_cmd_int_set(ifp, BRCMF_C_SET_MONITOR, monitor);
  	if (err)
  		bphy_err(drvr, "BRCMF_C_SET_MONITOR error (%d)\n", err);
-@@ -1623,6 +1724,15 @@ int __init brcmf_core_init(void)
+@@ -742,18 +843,13 @@ static int brcmf_net_mon_stop(struct net_device *ndev)
+ 	return err;
+ }
+ 
+-static netdev_tx_t brcmf_net_mon_start_xmit(struct sk_buff *skb,
+-					    struct net_device *ndev)
+-{
+-	dev_kfree_skb_any(skb);
+-
+-	return NETDEV_TX_OK;
+-}
+-
++/* NEXMON: upstream drops everything written to the monitor netdev. Send it through the
++ * normal data path instead, so radiotap frames reach the nexmon firmware (injection).
++ */
+ static const struct net_device_ops brcmf_netdev_ops_mon = {
+ 	.ndo_open = brcmf_net_mon_open,
+ 	.ndo_stop = brcmf_net_mon_stop,
+-	.ndo_start_xmit = brcmf_net_mon_start_xmit,
++	.ndo_start_xmit = brcmf_netdev_start_xmit,
+ };
+ 
+ int brcmf_net_mon_attach(struct brcmf_if *ifp)
+@@ -1623,6 +1719,15 @@ int __init brcmf_core_init(void)
  	err = brcmf_pcie_register();
  	if (err)
  		goto error_pcie_register;
@@ -413,7 +438,7 @@ index 49f94fd34..d2d65597e 100644
  	return 0;
  
  error_pcie_register:
-@@ -1634,6 +1744,9 @@ int __init brcmf_core_init(void)
+@@ -1634,6 +1739,9 @@ int __init brcmf_core_init(void)
  
  void __exit brcmf_core_exit(void)
  {
@@ -425,7 +450,7 @@ index 49f94fd34..d2d65597e 100644
  	brcmf_pcie_exit();
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/nexmon_ioctls.h b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/nexmon_ioctls.h
 new file mode 100644
-index 000000000..587b45dfe
+index 0000000000..587b45dfef
 --- /dev/null
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/nexmon_ioctls.h
 @@ -0,0 +1,15 @@

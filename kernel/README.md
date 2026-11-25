@@ -82,9 +82,21 @@ How it stays safe:
   The fix is in `patches/0001-brcmfmac-nexmon.patch`; the installed packages in
   `kernel/out/` predate it until the kernel is rebuilt.
 
+## Verified on 7.3.6 (rpi-7.3.y, 99dc5c58)
+
+- Boots with 16K pages and the lean config; `check-hardware.sh` passes (all 70 modules
+  the device uses are present); `CONFIG_LSM` now activates Landlock and Yama.
+- `test-monitor.sh` passes with `wlan0` still associated (channel 4, 201 frames,
+  beacons, radiotap). The firmware does not halt on 7.3, unlike on 6.18.
+- Packet injection works: `aireplay-ng --test` gets 30/30 directed probe replies.
+  Upstream's monitor netdev frees every transmitted frame; the patch now sends them
+  through `brcmf_netdev_start_xmit`, as the 6.12 DKMS does. Before that change
+  injection never reached the air on any kernel (0/30).
+  Test it on a channel with an AP (`test-monitor.sh --inject 4`); DFS channels fail.
+
 ## Not yet verified
 
-- Packet injection.
+- Bluetooth audio, the battery driver under load, and suspend on 7.3.
 - Whether the upstream `interface_create` path would also work with `wlan0` down
   (the legacy path is used regardless).
 - Whether `hackberrypi-max17048` can be replaced by mainline `max17040_battery`.
