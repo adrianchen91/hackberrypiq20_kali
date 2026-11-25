@@ -82,20 +82,52 @@ How it stays safe:
   The fix is in `patches/0001-brcmfmac-nexmon.patch`; the installed packages in
   `kernel/out/` predate it until the kernel is rebuilt.
 
+## Verified on 7.3.6 (rpi-7.3.y, 99dc5c58)
+
+- Boots with 16K pages and the lean config; `check-hardware.sh` passes (all 70 modules
+  the device uses are present); `CONFIG_LSM` now activates Landlock and Yama.
+- `test-monitor.sh` passes with `wlan0` still associated (channel 4, 201 frames,
+  beacons, radiotap). The firmware does not halt on 7.3, unlike on 6.18.
+- Packet injection works: `aireplay-ng --test` gets 30/30 directed probe replies.
+  Upstream's monitor netdev frees every transmitted frame; the patch now sends them
+  through `brcmf_netdev_start_xmit`, as the 6.12 DKMS does. Before that change
+  injection never reached the air on any kernel (0/30).
+  Test it on a channel with an AP (`test-monitor.sh --inject 4`); DFS channels fail.
+- Bluetooth audio: the BCM4345C0 firmware loads, the A2DP sink appears in PipeWire and a
+  4 s test tone plays cleanly on a speaker. `bluetooth.service` is disabled by default;
+  start it with `rfkill unblock bluetooth && systemctl start bluetooth`. A longer
+  playback test (dropouts) has not been done.
+
 ## Not yet verified
 
-- Packet injection.
+- The battery driver under load.
 - Whether the upstream `interface_create` path would also work with `wlan0` down
   (the legacy path is used regardless).
 - Whether `hackberrypi-max17048` can be replaced by mainline `max17040_battery`.
 
+## Known not working
+
+- **Suspend (7.3.6, rpi-7.3.y 99dc5c58).** On the stock tip every suspend aborted in
+  `brcmstb_gpio_suspend_noirq` (`error -16`) because GIO_AON has no parent IRQ;
+  `patches/0002` fixes that. With it, `test-suspend.sh` passes the `freezer` and `devices`
+  pm_test levels but the machine hangs at `platform` (2 runs, one with `--debug`) and needs
+  a power cycle. The journal loses its last minutes on a power cut, so no kernel output
+  survived; the cause is unknown, probably in the noirq or platform phase. Finding it needs
+  the debug UART (`ttyAMA10`, 115200, already the kernel console) and a USB-serial adapter.
+  Suspend is not usable; do not run `test-suspend.sh --real`.
+- Idle draw without suspend: about 2.15 W with the screen off, 2.6 W with it on (SoC
+  rails, `vcgencmd pmic_read_adc`). The CM5 exposes no CPU idle states.
+
 ## Lean profile (`build.sh --lean`)
 
-`lean.config` turns off 362 unused loadable modules (TV tuners except the RTL-SDR
-chain, gspca webcams, camera sensors, other-board audio codecs, IIO sensors,
-`fbtft` displays, cluster/server filesystems). It only removes modules: the kernel
-image is identical to the full build (same 111,536 built-in symbols, same version
-tag), and `build.sh --lean` refuses to build if a built-in option would change or a
+`lean.config` turns off unused loadable modules (TV tuners except the RTL-SDR chain,
+gspca webcams, camera sensors, other-board audio codecs and Pi audio HATs, IIO sensors,
+`fbtft` displays, cluster/server and legacy/flash filesystems, PCIe-only WiFi and NICs,
+software RAID, IPVS/batman/OVS/SCTP/L2TP, usbip). USB WiFi adapters, WireGuard,
+netfilter, XFS, btrfs, NFS and SMB are kept. The kernel image is the full build's image
+apart from a few small built-in sub-options that only existed for the removed modules
+(`CLOSURES`, `PLDMFW`, `SND_SOC_COMPRESS`, `MD_BITMAP`, ...; listed in `allow-y-change`).
+`build.sh --lean` refuses to build if any other built-in option would change or a
 required driver (display, HDMI audio, Bluetooth, wireless, serial, CAN, battery, touch)
 would be dropped.
 
@@ -108,7 +140,8 @@ Run it while a full kernel is running, before installing a lean one.
 
 ### Restoring a module without rebuilding
 
-Because the lean image equals the full one, a module from a full build loads into it:
+A module from a full build loads into a lean image when its core matches (modules that
+depend on the allow-listed sub-options, such as bcache, will be refused):
 
 ```bash
 cd /tmp && dpkg-deb -x ~/path/to/kernel/build/baseline-full/linux-image-*.deb full

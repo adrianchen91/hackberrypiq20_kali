@@ -82,7 +82,7 @@ if dpkg -s brcmfmac-nexmon-dkms &>/dev/null; then
     run install -d /etc/dkms
     if ! $DRY; then
         printf '%s\n' '# Written by hackberrypiq20_kali kernel/install.sh' \
-            '# The custom 6.18 kernel carries the nexmon patch in-tree.' \
+            '# The custom 7.3 kernel carries the nexmon patch in-tree.' \
             'BUILD_EXCLUSIVE_KERNEL="^6\.12\."' > /etc/dkms/brcmfmac-nexmon.conf
     fi
 fi

@@ -122,7 +122,7 @@ Options:
     --install-brave                Install Brave browser
     --install-antigravity          Install Antigravity package and repository
     -D, --dry-run                   Show what would change without modifying anything (no root needed)
-    -K, --custom-kernel             Build (if needed), install and enable the custom 6.18 kernel from kernel/ (slow: ~3 h first build on the CM5)
+    -K, --custom-kernel             Build (if needed), install and enable the custom 7.3 kernel from kernel/ (slow: ~3 h first build on the CM5)
     -k, --disable-kde-opt           Skip KDE Plasma tuning (animations, blur, borderless maximized, lock, splash, Konsole, autostarts)
     --disable-watchdog              Skip the systemd hardware watchdog (auto-reset if the whole system hangs)
     --only-touch-sleep              Run ONLY the touchscreen sleep hook step, nothing else (combine with -D to preview)

@@ -1,0 +1,31 @@
+From: hackberrypiq20_kali
+Subject: gpio: brcmstb: do not abort suspend when there is no parent IRQ
+
+GIO_AON has no interrupt on the Raspberry Pi 5 and CM5 (the device tree removes it
+because the firmware monitors the PMIC interrupt), so parent_irq is -ENOENT and
+brcmstb_gpio_suspend() never sets priv->suspended. brcmstb_gpio_suspend_noirq()
+then returns -EBUSY for "a wakeup source fired", and every system suspend fails with
+"brcmstb-gpio 107d517c00.gpio: PM: failed to suspend noirq: error -16".
+Only treat !suspended as a pending wakeup when there is a parent IRQ.
+Seen on rpi-7.3.y 99dc5c58.
+
+---
+diff --git a/drivers/gpio/gpio-brcmstb.c b/drivers/gpio/gpio-brcmstb.c
+index ad377619cf..9b198c77a6 100644
+--- a/drivers/gpio/gpio-brcmstb.c
++++ b/drivers/gpio/gpio-brcmstb.c
+@@ -584,8 +584,12 @@ static int brcmstb_gpio_suspend_noirq(struct device *dev)
+ {
+ 	struct brcmstb_gpio_priv *priv = dev_get_drvdata(dev);
+ 
+-	/* Catch any wakeup sources occurring between suspend and noirq */
+-	if (!priv->suspended)
++	/* Catch any wakeup sources occurring between suspend and noirq. Only
++	 * meaningful when there is a parent IRQ: without one (GIO_AON on the
++	 * Raspberry Pi 5 and CM5) ->suspended is never set, so this would abort
++	 * every system suspend.
++	 */
++	if (priv->parent_irq > 0 && !priv->suspended)
+ 		return -EBUSY;
+ 
+ 	if (priv->parent_irq > 0)

@@ -1,7 +1,7 @@
 #!/bin/bash
 ################################################################################
 # Script: kernel/build.sh
-# Description: Build the HackBerry custom kernel (Raspberry Pi rpi-6.18.y,
+# Description: Build the HackBerry custom kernel (Raspberry Pi rpi-7.3.y,
 #              bcm2712, 16K pages) into installable .deb packages in kernel/out/.
 #              Runs natively on the CM5 or on any arm64 Debian host. Needs no
 #              root unless --install-deps is given.
