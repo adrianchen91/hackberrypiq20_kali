@@ -126,7 +126,7 @@ Options:
     -k, --disable-kde-opt           Skip KDE Plasma tuning (animations, blur, borderless maximized, lock, splash, Konsole, autostarts)
     --disable-watchdog              Skip the systemd hardware watchdog (auto-reset if the whole system hangs)
     --only-touch-sleep              Run ONLY the touchscreen sleep hook step, nothing else (combine with -D to preview)
-    --disable-touch-sleep           Skip the touchscreen sleep hook (touch off while screen is blanked/suspended)
+    --disable-touch-sleep           Skip the touchscreen sleep hook (touch off while the session is locked or suspended)
     --enable-cloud-cleanup         Enable cloud-init cleanup/optimisation (disables cloud-init services)
     -h, --help                      Display this help message
 
@@ -1469,7 +1469,7 @@ EOF
     return 0
 }
 
-# Disable the touchscreen while the screen is blanked or the device is asleep.
+# Disable the touchscreen while the session is locked or the device is asleep (event-driven via logind, no polling).
 # Only the edt_ft5x06 touch controller is touched; keyboard and trackpad are never affected.
 configure_touch_sleep() {
     if ! $ENABLE_TOUCH_SLEEP; then

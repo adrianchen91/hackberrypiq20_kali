@@ -1,5 +1,5 @@
 [Unit]
-Description=Disable HackBerry touchscreen while the screen is blanked
+Description=Disable HackBerry touchscreen while the session is locked
 Documentation=file:///usr/local/sbin/hackberry-touch
 
 [Service]

@@ -3,11 +3,13 @@
 # keyboard or trackpad.
 #
 #   hackberry-touch on|off   force the touchscreen on or off
-#   hackberry-touch auto     on if the panel is lit, off if it is blanked
+#   hackberry-touch auto     off while any login session is locked, otherwise on
 #   hackberry-touch status   print "on" or "off"
-#   hackberry-touch watch    run forever, applying "auto" whenever the panel's
-#                            DPMS state changes (used by hackberry-touch.service)
+#   hackberry-touch watch    run forever, applying "auto" whenever logind reports
+#                            a lock/unlock (event-driven, no polling; used by
+#                            hackberry-touch.service)
 #
+# KDE sets logind's LockedHint when the screen locks and clears it on unlock.
 # Only input devices bound to the edt_ft5x06 I2C driver (the EP0110M09 touch
 # controller) are ever inhibited. The keyboard and trackpad are USB HID devices
 # and can never match, so they cannot be disabled by this tool.
@@ -15,7 +17,6 @@
 # stays bound, so turning it back on is instant and needs no re-probe.
 
 TOUCH_DRIVER="edt_ft5x06"
-POLL_SECONDS=2
 
 touch_devices() {
     local d drv
@@ -34,37 +35,40 @@ set_inhibit() {
     return $found
 }
 
-# Internal panel connectors only (HDMI etc. are ignored)
-panel_state() {
-    local f seen=false
-    for f in /sys/class/drm/card*-DPI-*/dpms /sys/class/drm/card*-DSI-*/dpms /sys/class/drm/card*-eDP-*/dpms; do
-        [[ -r "$f" ]] || continue
-        seen=true
-        [[ "$(<"$f")" == "On" ]] && { echo on; return; }
-    done
-    # No panel found: fail safe and keep touch usable
-    $seen && echo off || echo on
+# "locked" if any login session reports LockedHint=yes, else "unlocked".
+# Fails safe: if logind cannot be queried, report unlocked so touch stays usable.
+lock_state() {
+    local id
+    while read -r id _; do
+        [[ -n "$id" ]] || continue
+        [[ "$(loginctl show-session "$id" -p LockedHint --value 2>/dev/null)" == yes ]] && { echo locked; return; }
+    done < <(loginctl list-sessions --no-legend 2>/dev/null)
+    echo unlocked
 }
 
 case "${1:-}" in
     on)     set_inhibit 0 ;;
     off)    set_inhibit 1 ;;
-    auto)   [[ "$(panel_state)" == on ]] && set_inhibit 0 || set_inhibit 1 ;;
+    auto)   [[ "$(lock_state)" == locked ]] && set_inhibit 1 || set_inhibit 0 ;;
     status)
         d=$(touch_devices | head -n1)
         [[ -n "$d" ]] || { echo "no touchscreen found" >&2; exit 1; }
         [[ "$(<"$d/inhibited")" == 1 ]] && echo off || echo on
         ;;
     watch)
-        last=
-        while :; do
-            now=$(panel_state)
-            if [[ "$now" != "$last" ]]; then
-                "$0" auto
-                last="$now"
-            fi
-            sleep "$POLL_SECONDS"
+        "$0" auto
+        # Re-evaluate on every logind lock/unlock event. LockedHint changes arrive as
+        # PropertiesChanged on the session object; Lock/Unlock are logind's own signals.
+        dbus-monitor --system \
+            "type='signal',sender='org.freedesktop.login1',path_namespace='/org/freedesktop/login1/session'" \
+            2>/dev/null |
+        while read -r line; do
+            case "$line" in
+                *LockedHint*|*member=Lock*|*member=Unlock*) "$0" auto ;;
+            esac
         done
+        # dbus-monitor ended unexpectedly: exit non-zero so systemd restarts us
+        exit 1
         ;;
     *)
         echo "usage: ${0##*/} on|off|auto|status|watch" >&2
