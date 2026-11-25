@@ -93,10 +93,14 @@ How it stays safe:
   through `brcmf_netdev_start_xmit`, as the 6.12 DKMS does. Before that change
   injection never reached the air on any kernel (0/30).
   Test it on a channel with an AP (`test-monitor.sh --inject 4`); DFS channels fail.
+- Bluetooth audio: the BCM4345C0 firmware loads, the A2DP sink appears in PipeWire and a
+  4 s test tone plays cleanly on a speaker. `bluetooth.service` is disabled by default;
+  start it with `rfkill unblock bluetooth && systemctl start bluetooth`. A longer
+  playback test (dropouts) has not been done.
 
 ## Not yet verified
 
-- Bluetooth audio, the battery driver under load, and suspend on 7.3.
+- The battery driver under load, and suspend on 7.3.
 - Whether the upstream `interface_create` path would also work with `wlan0` down
   (the legacy path is used regardless).
 - Whether `hackberrypi-max17048` can be replaced by mainline `max17040_battery`.
