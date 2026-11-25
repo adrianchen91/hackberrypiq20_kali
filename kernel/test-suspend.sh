@@ -6,22 +6,34 @@
 #              real suspend path up to that point, waits about 5 s and resumes,
 #              so a driver that cannot suspend shows up without powering down.
 #              With --real it then does a full suspend woken by the RTC alarm.
-# Usage: sudo ./kernel/test-suspend.sh [--real] [SECONDS]     (default 20 s asleep)
-#   --real   after the staged levels pass, suspend for real and wake from the RTC.
-#            If resume fails the machine hangs and needs a power cycle: save work first.
+# Usage: sudo ./kernel/test-suspend.sh [--real] [--debug] [--level NAME] [SECONDS]
+#   --real        after the staged levels pass, suspend for real and wake from the RTC.
+#                 If resume fails the machine hangs and needs a power cycle: save work first.
+#   --level NAME  run only that pm_test level (freezer, devices, platform, processors, core)
+#   --debug       for hunting a hang: keep the console alive during suspend, print every
+#                 device's suspend/resume callback and run them one at a time, so the last
+#                 line on the screen (or the debug UART, ttyAMA10) names the culprit.
+#                 Settings are restored on exit. Needs a power cycle if it does hang.
 # Log: kernel/build/suspend-test.log
 ################################################################################
 set -uo pipefail
 
 REAL=false
+DEBUG=false
+ONLY=""
 SECS=20
-for a in "$@"; do
-    case "$a" in
+while (($#)); do
+    case "$1" in
         --real) REAL=true ;;
-        ''|*[!0-9]*) echo "usage: $0 [--real] [SECONDS]" >&2; exit 2 ;;
-        *) SECS="$a" ;;
+        --debug) DEBUG=true ;;
+        --level) shift; ONLY="${1:-}" ;;
+        --level=*) ONLY="${1#--level=}" ;;
+        ''|*[!0-9]*) echo "usage: $0 [--real] [--debug] [--level NAME] [SECONDS]" >&2; exit 2 ;;
+        *) SECS="$1" ;;
     esac
+    shift
 done
+case "$ONLY" in ''|freezer|devices|platform|processors|core) ;; *) echo "unknown level: $ONLY" >&2; exit 2 ;; esac
 [[ $EUID -eq 0 ]] || { echo "run as root: sudo $0 $*" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,8 +49,27 @@ info() { echo "[INFO] $*" | tee -a "$LOG"; }
 [[ -w /sys/power/pm_test ]] || { echo "kernel has no pm_test (CONFIG_PM_DEBUG)" >&2; exit 1; }
 grep -qw mem /sys/power/state || { echo "/sys/power/state has no 'mem'; suspend unsupported" >&2; exit 1; }
 
-cleanup() { echo none > /sys/power/pm_test 2>/dev/null; }
+declare -A SAVED
+knob() { # knob FILE VALUE: set a sysfs/proc value and remember the old one
+    [[ -w "$1" ]] || return 0
+    SAVED["$1"]="$(cat "$1")"
+    echo "$2" > "$1" 2>/dev/null || true
+}
+cleanup() {
+    echo none > /sys/power/pm_test 2>/dev/null
+    local f
+    for f in "${!SAVED[@]}"; do echo "${SAVED[$f]}" > "$f" 2>/dev/null || true; done
+}
 trap cleanup EXIT
+
+if $DEBUG; then
+    knob /sys/module/printk/parameters/console_suspend N   # keep printing after consoles would sleep
+    knob /proc/sys/kernel/printk "8 8 1 8"                 # every level to the console
+    knob /sys/power/pm_debug_messages 1
+    knob /sys/power/pm_print_times 1                       # 'calling X' / 'X returned' per device
+    knob /sys/power/pm_async 0                             # one device at a time, so the last line is the culprit
+    info "debug on: console stays live, per-device PM messages, synchronous callbacks"
+fi
 
 # Messages that mean a suspend or resume problem
 BAD_RE='PM: (Some devices failed|failed to suspend|failed to resume)|failed to suspend|failed to resume|suspend of devices failed|Freezing .* failed|timed out|Oops|BUG:|WARNING:|Call trace|firmware trap|brcmf_fw_crashed|I/O error|xHCI host controller not responding|hc died'
@@ -49,6 +80,7 @@ echo "kernel $(uname -r), mem_sleep: $(cat /sys/power/mem_sleep 2>/dev/null)" | 
 
 # --- staged levels -------------------------------------------------------------
 for level in freezer devices platform processors core; do
+    [[ -z "$ONLY" || "$ONLY" == "$level" ]] || continue
     grep -qw "$level" /sys/power/pm_test || { info "pm_test level '$level' not offered, skipped"; continue; }
     sync
     t0=$(date +%s)

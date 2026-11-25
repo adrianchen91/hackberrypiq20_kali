@@ -101,14 +101,22 @@ How it stays safe:
 ## Not yet verified
 
 - The battery driver under load.
-- Suspend on 7.3. On 99dc5c58 every suspend aborted in `brcmstb_gpio_suspend_noirq`
-  (`error -16`) because GIO_AON has no parent IRQ; `patches/0002` fixes that. The
-  `freezer` and `devices` pm_test levels pass; `platform` and later, and a real suspend
-  (`test-suspend.sh --real`), are untested with the fix. Idle draw is about 2.15 W with
-  the screen off (SoC rails, `vcgencmd pmic_read_adc`), 2.6 W with it on.
 - Whether the upstream `interface_create` path would also work with `wlan0` down
   (the legacy path is used regardless).
 - Whether `hackberrypi-max17048` can be replaced by mainline `max17040_battery`.
+
+## Known not working
+
+- **Suspend (7.3.6, rpi-7.3.y 99dc5c58).** On the stock tip every suspend aborted in
+  `brcmstb_gpio_suspend_noirq` (`error -16`) because GIO_AON has no parent IRQ;
+  `patches/0002` fixes that. With it, `test-suspend.sh` passes the `freezer` and `devices`
+  pm_test levels but the machine hangs at `platform` (2 runs, one with `--debug`) and needs
+  a power cycle. The journal loses its last minutes on a power cut, so no kernel output
+  survived; the cause is unknown, probably in the noirq or platform phase. Finding it needs
+  the debug UART (`ttyAMA10`, 115200, already the kernel console) and a USB-serial adapter.
+  Suspend is not usable; do not run `test-suspend.sh --real`.
+- Idle draw without suspend: about 2.15 W with the screen off, 2.6 W with it on (SoC
+  rails, `vcgencmd pmic_read_adc`). The CM5 exposes no CPU idle states.
 
 ## Lean profile (`build.sh --lean`)
 
