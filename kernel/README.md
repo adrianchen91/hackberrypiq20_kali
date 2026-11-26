@@ -50,6 +50,7 @@ line in `hackberry.config` does not survive `olddefconfig`.
 sudo ./kernel/install.sh                # install and stage only
 sudo ./kernel/install.sh --enable       # also set os_prefix in config.txt
 sudo ./kernel/install.sh --disable      # rollback to the stock kernel
+sudo ./kernel/install.sh --allow-suspend # remove the suspend block (default: suspend is blocked, see below)
 ```
 
 How it stays safe:
@@ -114,7 +115,15 @@ How it stays safe:
   a power cycle. The journal loses its last minutes on a power cut, so no kernel output
   survived; the cause is unknown, probably in the noirq or platform phase. Finding it needs
   the debug UART (`ttyAMA10`, 115200, already the kernel console) and a USB-serial adapter.
-  Suspend is not usable; do not run `test-suspend.sh --real`.
+  Do not run `test-suspend.sh --real`.
+  **It also happens on its own.** 7.3 offers `mem` in `/sys/power/state` (6.12 and 6.18 do
+  not), so `logind` reports `CanSuspend=yes` and KDE PowerDevil suspends the idle desktop:
+  on 2026-11-26 the log ends at `systemd-sleep: Performing sleep operation 'suspend'` at
+  11:05:35, about 15 minutes after the last activity, and the device had to be power cycled.
+  `install.sh` therefore writes `/etc/systemd/sleep.conf.d/hackberry-no-suspend.conf`
+  (`AllowSuspend=no` and the hibernate variants), after which `busctl call
+  org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager CanSuspend`
+  prints `s "no"`. Pass `--allow-suspend` to `install.sh` to remove it once suspend works.
 - Idle draw without suspend: about 2.15 W with the screen off, 2.6 W with it on (SoC
   rails, `vcgencmd pmic_read_adc`). The CM5 exposes no CPU idle states.
 

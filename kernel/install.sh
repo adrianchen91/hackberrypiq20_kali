@@ -6,11 +6,16 @@
 #              Pi bootloader to it with os_prefix=. The stock 6.12 kernel and
 #              its files in /boot/firmware are never touched, so rollback is
 #              removing one line from config.txt.
-# Usage: sudo ./kernel/install.sh [--dir DIR] [--enable | --disable] [--dry-run]
+# Usage: sudo ./kernel/install.sh [--dir DIR] [--enable | --disable] [--allow-suspend] [--dry-run]
 #   --dir DIR    directory with the .deb files (default: kernel/out)
 #   --enable     after staging, add os_prefix to config.txt (backed up first)
 #   --disable    only remove os_prefix from config.txt (rollback) and exit
+#   --allow-suspend  do not block system suspend (see below); also removes the block
 #   --dry-run    print what would happen, change nothing (no root needed)
+# Suspend is blocked by default: on rpi-7.3.y /sys/power/state offers 'mem', so KDE idles
+# into suspend, and the CM5 then hangs at the platform stage and needs a power cycle
+# (see kernel/README.md, Known not working). A systemd sleep.conf.d drop-in sets
+# AllowSuspend=no so logind reports CanSuspend=no. Use --allow-suspend once it works.
 # Re-running is safe: files are refreshed, config.txt is edited idempotently.
 # Run it again after changing /boot/firmware/cmdline.txt so the copy follows.
 ################################################################################
@@ -21,7 +26,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/kernel.conf"
 
 DEBDIR="$HERE/out"
-ENABLE=false DISABLE=false DRY=false
+ENABLE=false DISABLE=false DRY=false ALLOW_SUSPEND=false
 FW=/boot/firmware
 CONFIG_TXT="$FW/config.txt"
 BEGIN="# hackberry-kernel-begin"
@@ -32,8 +37,9 @@ while [[ $# -gt 0 ]]; do
         --dir) DEBDIR="$2"; shift 2 ;;
         --enable) ENABLE=true; shift ;;
         --disable) DISABLE=true; shift ;;
+        --allow-suspend) ALLOW_SUSPEND=true; shift ;;
         --dry-run|-D) DRY=true; shift ;;
-        -h|--help) sed -n '3,17p' "$0"; exit 0 ;;
+        -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -84,6 +90,25 @@ if dpkg -s brcmfmac-nexmon-dkms &>/dev/null; then
         printf '%s\n' '# Written by hackberrypiq20_kali kernel/install.sh' \
             '# The custom 7.3 kernel carries the nexmon patch in-tree.' \
             'BUILD_EXCLUSIVE_KERNEL="^6\.12\."' > /etc/dkms/brcmfmac-nexmon.conf
+    fi
+fi
+
+# Suspend hangs the CM5 on rpi-7.3.y (pm_test 'platform' stage), and KDE's idle timer
+# triggers it by itself, so tell logind that no sleep state is available.
+SLEEP_CONF=/etc/systemd/sleep.conf.d/hackberry-no-suspend.conf
+if $ALLOW_SUSPEND; then
+    if [[ -e "$SLEEP_CONF" ]]; then
+        info "Removing $SLEEP_CONF (suspend allowed again)"
+        run rm -f "$SLEEP_CONF"
+    fi
+else
+    info "Blocking system suspend ($SLEEP_CONF); it hangs on this kernel, see kernel/README.md"
+    run install -d /etc/systemd/sleep.conf.d
+    if ! $DRY; then
+        printf '%s\n' '# Written by hackberrypiq20_kali kernel/install.sh' \
+            '# Suspend hangs the CM5 on rpi-7.3.y. Re-run install.sh with --allow-suspend to remove.' \
+            '[Sleep]' 'AllowSuspend=no' 'AllowHibernation=no' \
+            'AllowSuspendThenHibernate=no' 'AllowHybridSleep=no' > "$SLEEP_CONF"
     fi
 fi
 
