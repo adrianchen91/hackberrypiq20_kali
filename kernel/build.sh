@@ -17,6 +17,8 @@
 #   --update        build the current tip of KERNEL_BRANCH instead of the pinned
 #                   KERNEL_SHA and print the SHA (then pin it in kernel.conf)
 #   --clean         remove kernel/build before starting
+#   --debug-patches also apply kernel/debug-patches/*.patch (suspend bisect hook; never for
+#                   a build you publish)
 ################################################################################
 set -euo pipefail
 
@@ -27,7 +29,7 @@ source "$HERE/kernel.conf"
 SRC="$HERE/build/linux"
 OUT="$HERE/out"
 JOBS="$(nproc)"
-INSTALL_DEPS=false DEPS_ONLY=false LEAN=false CONFIG_ONLY=false MENUCONFIG=false UPDATE=false CLEAN=false
+INSTALL_DEPS=false DEPS_ONLY=false LEAN=false CONFIG_ONLY=false MENUCONFIG=false UPDATE=false CLEAN=false DEBUG_PATCHES=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,6 +41,7 @@ while [[ $# -gt 0 ]]; do
         --menuconfig) MENUCONFIG=true; shift ;;
         --update) UPDATE=true; shift ;;
         --clean) CLEAN=true; shift ;;
+        --debug-patches) DEBUG_PATCHES=true; shift ;;
         -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
@@ -105,6 +108,12 @@ for p in "$HERE"/patches/*.patch; do
     info "Applying $(basename "$p")"
     git apply --index "$p" || die "patch failed: $p (rebase it onto $TARGET)"
 done
+if $DEBUG_PATCHES; then
+    for p in "$HERE"/debug-patches/*.patch; do
+        warn "Applying DEBUG patch $(basename "$p") (do not publish this build)"
+        git apply --index "$p" || die "debug patch failed: $p (rebase it onto $TARGET)"
+    done
+fi
 shopt -u nullglob
 
 # --- configure ---------------------------------------------------------------

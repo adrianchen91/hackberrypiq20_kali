@@ -72,7 +72,10 @@ if $DEBUG; then
 fi
 
 # Messages that mean a suspend or resume problem
-BAD_RE='PM: (Some devices failed|failed to suspend|failed to resume)|failed to suspend|failed to resume|suspend of devices failed|Freezing .* failed|timed out|Oops|BUG:|WARNING:|Call trace|firmware trap|brcmf_fw_crashed|I/O error|xHCI host controller not responding|hc died'
+BAD_RE='PM: (Some devices failed|failed to suspend|failed to resume)|failed to suspend|failed to resume|suspend of devices failed|Freezing .* failed|timed out|Oops|BUG:|WARNING:|Call trace|firmware trap|brcmf_fw_crashed|I/O error|xHCI host controller not responding|hc died|failed to come online|Error taking CPU'
+
+cpus_online() { cat /sys/devices/system/cpu/online 2>/dev/null; }
+CPUS_BEFORE="$(cpus_online)"
 
 kernel_msgs_since() { journalctl -k --since "@$1" --no-pager 2>/dev/null; }
 
@@ -91,6 +94,10 @@ for level in freezer devices platform processors core; do
         if grep -Eq "$BAD_RE" <<<"$msgs"; then
             bad "level '$level': suspended but the kernel reported problems"
             grep -E "$BAD_RE" <<<"$msgs" | head -5 | sed 's/^/        /'
+            break
+        fi
+        if [[ "$(cpus_online)" != "$CPUS_BEFORE" ]]; then
+            bad "level '$level': resumed, but CPUs online changed from $CPUS_BEFORE to $(cpus_online)"
             break
         fi
         ok "level '$level' suspend and resume"
