@@ -1,0 +1,15 @@
+[Unit]
+Description=Choose the CPU governor from lock state, power source and Plasma power profile
+Documentation=file:///usr/local/sbin/hackberry-governor
+After=cpufreq-tune.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/hackberry-governor watch
+# Fall back to the boot default if the watcher stops
+ExecStopPost=/usr/bin/sh -c 'for p in /sys/devices/system/cpu/cpufreq/policy*; do echo powersave > $p/scaling_governor; done'
+Restart=on-failure
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

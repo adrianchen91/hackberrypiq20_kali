@@ -46,6 +46,8 @@ ENABLE_CLOUD_CLEANUP=false
 ENABLE_KDE_OPTIMIZATION=true
 ENABLE_TOUCH_SLEEP=true
 ONLY_TOUCH_SLEEP=false
+ENABLE_GOVERNOR_WATCH=true
+ONLY_GOVERNOR_WATCH=false
 ENABLE_WATCHDOG=true
 DRY_RUN=false
 ENABLE_CUSTOM_KERNEL=false
@@ -127,6 +129,8 @@ Options:
     --disable-watchdog              Skip the systemd hardware watchdog (auto-reset if the whole system hangs)
     --only-touch-sleep              Run ONLY the touchscreen sleep hook step, nothing else (combine with -D to preview)
     --disable-touch-sleep           Skip the touchscreen sleep hook (touch off while the session is locked or suspended)
+    --only-governor-watch           Run ONLY the CPU governor watcher step, nothing else (combine with -D to preview)
+    --disable-governor-watch        Skip the governor watcher (schedutil on AC and unlocked, powersave on battery, locked or Plasma power-saver)
     --enable-cloud-cleanup         Enable cloud-init cleanup/optimisation (disables cloud-init services)
     -h, --help                      Display this help message
 
@@ -213,6 +217,14 @@ parse_arguments() {
                 ENABLE_TOUCH_SLEEP=false
                 shift
                 ;;
+            --only-governor-watch)
+                ONLY_GOVERNOR_WATCH=true
+                shift
+                ;;
+            --disable-governor-watch)
+                ENABLE_GOVERNOR_WATCH=false
+                shift
+                ;;
             --install-brave)
                 ENABLE_BRAVE=true
                 shift
@@ -280,6 +292,7 @@ display_config() {
     echo "  Cloud Cleanup: $ENABLE_CLOUD_CLEANUP"
     echo "  KDE Optimization: $ENABLE_KDE_OPTIMIZATION"
     echo "  Touch Sleep Hook: $ENABLE_TOUCH_SLEEP"
+    echo "  Governor Watcher: $ENABLE_GOVERNOR_WATCH"
     echo "  Hardware Watchdog: $ENABLE_WATCHDOG"
     echo "  Custom Kernel: $ENABLE_CUSTOM_KERNEL"
     echo "  Dry Run: $DRY_RUN"
@@ -1512,6 +1525,57 @@ configure_touch_sleep() {
     return 1
 }
 
+# Switch the CPU governor with the power state: schedutil on AC while unlocked, powersave on
+# battery, while the session is locked, or when Plasma's profile is power-saver. The boot
+# default stays whatever cpufreq-tune.service sets. Only applies to the default powersave
+# governor: if you picked another one with -g, that choice is left alone.
+configure_governor_watch() {
+    if ! $ENABLE_GOVERNOR_WATCH; then
+        print_warning "Governor watcher disabled"
+        track_skip_flag "governor watch"
+        return 0
+    fi
+    if ! $ENABLE_POWER_MANAGEMENT; then
+        print_warning "Power management disabled, skipping governor watcher"
+        track_skip_flag "governor watch"
+        return 0
+    fi
+    if [[ "$CPU_GOVERNOR" != "powersave" ]]; then
+        print_status "CPU governor is '$CPU_GOVERNOR' (not powersave), leaving it fixed; skipping governor watcher"
+        track_skip "governor watch"
+        return 0
+    fi
+
+    local src="$REPO_DIR/governor" f
+    for f in hackberry-governor hackberry-governor.service; do
+        if [[ ! -f "$src/$f" ]]; then
+            print_warning "Missing $src/$f, skipping governor watcher"
+            track_failure "governor watch"
+            return 1
+        fi
+    done
+
+    print_status "Installing CPU governor watcher..."
+    local ok=true
+    cp "$src/hackberry-governor" /usr/local/sbin/hackberry-governor \
+        && chmod 755 /usr/local/sbin/hackberry-governor || ok=false
+    cp "$src/hackberry-governor.service" /etc/systemd/system/hackberry-governor.service \
+        && chmod 644 /etc/systemd/system/hackberry-governor.service || ok=false
+
+    if $ok; then
+        systemctl daemon-reload || true
+        systemctl enable --now hackberry-governor.service \
+            || { print_warning "Failed to enable hackberry-governor.service"; ok=false; }
+    fi
+
+    if $ok; then
+        track_success
+        return 0
+    fi
+    track_failure "governor watch"
+    return 1
+}
+
 # KDE Plasma tuning for low-power ARM hardware (applied for the invoking user)
 configure_kde_optimization() {
     if ! $ENABLE_KDE_OPTIMIZATION; then
@@ -1575,6 +1639,19 @@ configure_kde_optimization() {
         # Auto-lock after 10 minutes
         kcfg kscreenlockerrc Autolock true Daemon
         kcfg kscreenlockerrc Timeout 10 Daemon
+        # Blank the panel sooner. Measured on the CM5: panel signal off saves about 0.5 W
+        # (the backlight is a physical button, so it stays lit). KDE defaults are 5-10 min.
+        # Once the session is locked the panel goes off after 10 s (AC) or 5 s (battery).
+        local profile
+        for profile in AC Battery LowBattery; do
+            kcfg powermanagementprofilesrc TurnOffDisplayWhenIdle true "$profile" Display
+        done
+        kcfg powermanagementprofilesrc TurnOffDisplayIdleTimeoutWhenLockedSec 10 AC Display
+        kcfg powermanagementprofilesrc TurnOffDisplayIdleTimeoutWhenLockedSec 5 Battery Display
+        kcfg powermanagementprofilesrc TurnOffDisplayIdleTimeoutWhenLockedSec 5 LowBattery Display
+        kcfg powermanagementprofilesrc TurnOffDisplayIdleTimeoutSec 120 AC Display
+        kcfg powermanagementprofilesrc TurnOffDisplayIdleTimeoutSec 60 Battery Display
+        kcfg powermanagementprofilesrc TurnOffDisplayIdleTimeoutSec 30 LowBattery Display
         # No splash screen (faster login, plain background instead)
         kcfg ksplashrc Engine none KSplash
         kcfg ksplashrc Theme None KSplash
@@ -1707,6 +1784,13 @@ main() {
         [[ $FAIL_COUNT -eq 0 ]] && exit 0 || exit 1
     fi
 
+    # Scoped run: governor watcher only
+    if $ONLY_GOVERNOR_WATCH; then
+        configure_governor_watch || true
+        print_summary
+        [[ $FAIL_COUNT -eq 0 ]] && exit 0 || exit 1
+    fi
+
     # Execute configuration tasks (continue even if some fail)
     configure_raspi_config || true
     configure_eeprom || true
@@ -1726,6 +1810,7 @@ main() {
     configure_watchdog || true
     configure_kde_optimization || true
     configure_touch_sleep || true
+    configure_governor_watch || true
     configure_wifi || true
     configure_bluetooth || true
     configure_custom_kernel || true

@@ -39,8 +39,9 @@ sudo ./hackberrypiq20setup.sh -h
 - Power management (NVMe, CPU governor)
 - Hardware watchdog (systemd feeds the BCM2835 watchdog; resets a fully hung system after 15s; skip with `--disable-watchdog`)
 - System power tuning (sysctl write batching, journald limits, WiFi power save)
-- KDE Plasma tuning (shorter animations, no blur, borderless maximized windows, 10 min auto-lock, Konsole menu bar hidden, Discover/KDE Connect autostarts hidden; skip with `-k`). Existing user settings are never overwritten
+- KDE Plasma tuning (shorter animations, no blur, borderless maximized windows, 10 min auto-lock, panel off after 2 min idle on AC, 1 min on battery, 30 s on low battery, and once locked 10 s on AC and 5 s on battery, Konsole menu bar hidden, Discover/KDE Connect autostarts hidden; skip with `-k`). Existing user settings are never overwritten
 - Touchscreen sleep hook (touch is disabled while the session is locked or the device is suspended and re-enabled on unlock (event-driven via logind, no polling); keyboard and trackpad are never touched; skip with `--disable-touch-sleep`)
+- CPU governor watcher (schedutil on AC while unlocked, powersave on battery, while the session is locked, or when Plasma's power profile is power-saver; event-driven via D-Bus; only with the default powersave governor; skip with `--disable-governor-watch`)
 - Networking optimization (NetworkManager + netplan)
 - Xorg display configuration
 
