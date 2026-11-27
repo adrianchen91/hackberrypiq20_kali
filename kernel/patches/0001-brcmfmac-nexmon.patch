@@ -2,8 +2,8 @@ From: hackberrypiq20_kali
 Subject: brcmfmac: add nexmon monitor mode and ioctl support
 
 Forward-port of the nexmon brcmfmac driver changes (seemoo-lab/nexmon, as
-packaged by Kali brcmfmac-nexmon-dkms 6.12.2) to rpi-6.18.y.
-Base: raspberrypi/linux rpi-6.18.y a40f73532 (6.18.64).
+packaged by Kali brcmfmac-nexmon-dkms 6.12.2).
+Base: raspberrypi/linux rpi-7.3.y 99dc5c58 (7.3.6). The 6.18 version is on branch kernel-6.18.
 The monitor vif is created with the legacy bsscfg:ssid method because the
 nexmon firmware crashes on the interface_create iovar, and gets the same
 priv_destructor as other vifs so it is freed when deleted.
@@ -11,9 +11,17 @@ Monitor mode works with wlan0 down; with wlan0 associated the firmware halts.
 The monitor netdev transmits through brcmf_netdev_start_xmit (as in the 6.12 DKMS)
 instead of upstream's stub that frees every frame, so injected frames reach the firmware.
 
+The netlink ioctl passthrough is hardened against the original nexmon code: it needs
+CAP_NET_ADMIN, checks the message and payload lengths (payload at most BRCMF_DCMD_MAXLEN),
+replies to the portid the kernel recorded instead of the one in the message, never writes
+into the received skb, and handles allocation failures. The target interface is the primary
+one only, set after it registers, cleared in brcmf_net_detach() and guarded by a mutex, so
+it cannot be used after it is gone. A failed netlink socket now unwinds the bus drivers
+instead of leaking them, and normal-path messages are debug level.
+
 ---
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
-index 4943f5c62c..19ee4f16a1 100644
+index 4943f5c..2c6f823 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
 @@ -5,7 +5,10 @@
@@ -36,10 +44,10 @@ index 4943f5c62c..19ee4f16a1 100644
 +	//Return not supported if hostapd tries to add a second monitor interface
 +	if (new_type == NL80211_IFTYPE_MONITOR)
 +	{    
-+		brcmf_err("Attempt to add a MONITOR interface...\n");
++		brcmf_dbg(INFO, "NEXMON: monitor interface requested\n");
 +		if (params.iftype_num[new_type] > 1) 
 +		{
-+			brcmf_err("... there is already a monitor interface, returning EOPNOTSUPP\n");
++			brcmf_dbg(INFO, "NEXMON: a monitor interface already exists, returning EOPNOTSUPP\n");
 +			return -EOPNOTSUPP;
 +		}
 +	}
@@ -163,7 +171,7 @@ index 4943f5c62c..19ee4f16a1 100644
  
  static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
  						     const char *name,
-@@ -1024,6 +1142,29 @@ static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
+@@ -1024,6 +1142,28 @@ static struct wireless_dev *brcmf_cfg80211_add_iface(struct wiphy *wiphy,
  	return wdev;
  }
  
@@ -180,7 +188,6 @@ index 4943f5c62c..19ee4f16a1 100644
 +	s32 err = 0;
 +	u16 chanspec;
 +
-+	//brcmf_err("DEBUG NexMon: brcmf_cfg80211_nexmon_set_channel() called!\n");
 +	chanspec = chandef_to_chanspec(&cfg->d11inf, chandef);
 +	err = brcmf_fil_iovar_int_set(ifp, "chanspec", chanspec);
 +	if (err < 0) {
@@ -193,7 +200,7 @@ index 4943f5c62c..19ee4f16a1 100644
  static void brcmf_scan_config_mpc(struct brcmf_if *ifp, int mpc)
  {
  	if (brcmf_feat_is_quirk_enabled(ifp, BRCMF_FEAT_QUIRK_NEED_MPC))
-@@ -1324,8 +1465,12 @@ int brcmf_cfg80211_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev)
+@@ -1324,8 +1464,12 @@ int brcmf_cfg80211_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev)
  	case NL80211_IFTYPE_WDS:
  	case NL80211_IFTYPE_MESH_POINT:
  		return -EOPNOTSUPP;
@@ -206,7 +213,7 @@ index 4943f5c62c..19ee4f16a1 100644
  	case NL80211_IFTYPE_STATION:
  	case NL80211_IFTYPE_AP:
  		return brcmf_cfg80211_del_apsta_iface(wiphy, wdev);
-@@ -1393,6 +1538,10 @@ brcmf_cfg80211_change_iface(struct wiphy *wiphy, struct net_device *ndev,
+@@ -1393,6 +1537,10 @@ brcmf_cfg80211_change_iface(struct wiphy *wiphy, struct net_device *ndev,
  	}
  	switch (type) {
  	case NL80211_IFTYPE_MONITOR:
@@ -217,7 +224,7 @@ index 4943f5c62c..19ee4f16a1 100644
  	case NL80211_IFTYPE_WDS:
  		bphy_err(drvr, "type (%d) : currently we do not support this type\n",
  			 type);
-@@ -6227,6 +6376,9 @@ static struct cfg80211_ops brcmf_cfg80211_ops = {
+@@ -6227,6 +6375,9 @@ static struct cfg80211_ops brcmf_cfg80211_ops = {
  	.crit_proto_start = brcmf_cfg80211_crit_proto_start,
  	.crit_proto_stop = brcmf_cfg80211_crit_proto_stop,
  	.tdls_oper = brcmf_cfg80211_tdls_oper,
@@ -227,7 +234,7 @@ index 4943f5c62c..19ee4f16a1 100644
  	.update_connect_params = brcmf_cfg80211_update_conn_params,
  	.set_pmk = brcmf_cfg80211_set_pmk,
  	.del_pmk = brcmf_cfg80211_del_pmk,
-@@ -7846,7 +7998,13 @@ static int brcmf_setup_ifmodes(struct wiphy *wiphy, struct brcmf_if *ifp)
+@@ -7846,7 +7997,13 @@ static int brcmf_setup_ifmodes(struct wiphy *wiphy, struct brcmf_if *ifp)
  	bool mon_flag, mbss, p2p, rsdb, mchan;
  	int i, c, n_combos, n_limits;
  
@@ -242,7 +249,7 @@ index 4943f5c62c..19ee4f16a1 100644
  	p2p = brcmf_feat_is_enabled(ifp, BRCMF_FEAT_P2P);
  	rsdb = brcmf_feat_is_enabled(ifp, BRCMF_FEAT_RSDB);
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
-index 9cf894d06e..14248a14d7 100644
+index 9cf894d..14248a1 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/common.c
 @@ -26,6 +26,7 @@
@@ -254,7 +261,7 @@ index 9cf894d06e..14248a14d7 100644
  #define BRCMF_DEFAULT_SCAN_CHANNEL_TIME	40
  #define BRCMF_DEFAULT_SCAN_UNASSOC_TIME	40
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/core.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/core.c
-index 080c9c9293..dc380a3260 100644
+index 080c9c9..3acd041 100644
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/core.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/core.c
 @@ -7,7 +7,6 @@
@@ -265,7 +272,7 @@ index 080c9c9293..dc380a3260 100644
  #include <net/cfg80211.h>
  #include <net/rtnetlink.h>
  #include <net/addrconf.h>
-@@ -30,6 +29,25 @@
+@@ -30,6 +29,27 @@
  #include "pcie.h"
  #include "common.h"
  
@@ -273,6 +280,8 @@ index 080c9c9293..dc380a3260 100644
 +#include <linux/property.h>
 +#include <linux/if_arp.h>
 +#include <linux/netlink.h>
++#include <net/netlink.h>
++#include <linux/mutex.h>
 +#include "nexmon_ioctls.h"
 +#include "defs.h"
 +#include "sdio.h"
@@ -291,93 +300,135 @@ index 080c9c9293..dc380a3260 100644
  #define MAX_WAIT_FOR_8021X_TX			msecs_to_jiffies(950)
  
  #define BRCMF_BSSIDX_INVALID			-1
-@@ -64,6 +82,75 @@ struct wlc_d11rxhdr {
+@@ -64,6 +84,99 @@ struct wlc_d11rxhdr {
  	s8 rxpwr[4];
  } __packed;
  
-+ /*NEXMON*/
-+static struct netlink_kernel_cfg cfg = {0};
-+static struct sock *nl_sock = NULL;
-+static struct net_device *ndev_global = NULL;
++/*
++ * NEXMON: netlink passthrough to the firmware ioctl interface (used by nexutil).
++ *
++ * The handler runs in the sender's context, so it refuses anyone without
++ * CAP_NET_ADMIN. Every length is checked against the received netlink message, the
++ * reply goes to the portid the kernel recorded (not the one the sender wrote into the
++ * message) and the target interface is protected by nexmon_lock, so it cannot be used
++ * after the interface is gone.
++ */
++static struct netlink_kernel_cfg nexmon_nl_cfg;
++static struct sock *nexmon_nl_sock;
++static struct net_device *nexmon_ndev;	/* primary interface, under nexmon_lock */
++static DEFINE_MUTEX(nexmon_lock);
 +
-+ struct nexudp_header {
-+    char nex[3];
-+    char type;
-+    int securitycookie;
-+} __attribute__((packed));
++struct nexudp_header {
++	char nex[3];
++	char type;
++	int securitycookie;
++} __packed;
 +
-+ struct nexudp_ioctl_header {
-+    struct nexudp_header nexudphdr;
-+    unsigned int cmd;
-+    unsigned int set;
-+    char payload[1];
-+} __attribute__((packed));
++struct nexudp_ioctl_header {
++	struct nexudp_header nexudphdr;
++	unsigned int cmd;
++	unsigned int set;
++	char payload[];
++} __packed;
 +
-+ static void
-+nexmon_nl_ioctl_handler(struct sk_buff *skb)
++static void nexmon_nl_ioctl_handler(struct sk_buff *skb)
 +{
-+    struct nlmsghdr *nlh = (struct nlmsghdr *) skb->data;
-+    struct nexudp_ioctl_header *frame = (struct nexudp_ioctl_header *) nlmsg_data(nlh);
-+    struct brcmf_if *ifp = netdev_priv(ndev_global);
-+    struct sk_buff *skb_out;
-+    struct nlmsghdr *nlh_tx;
++	struct nlmsghdr *nlh = nlmsg_hdr(skb);
++	struct nexudp_ioctl_header *frame, *reply;
++	struct sk_buff *skb_out;
++	struct nlmsghdr *nlh_tx;
++	struct brcmf_if *ifp;
++	u32 portid = NETLINK_CB(skb).portid;
++	unsigned int len, paylen;
++	s32 err;
 +
-+     brcmf_err("NEXMON: %s: Enter\n", __FUNCTION__);
++	if (!netlink_capable(skb, CAP_NET_ADMIN))
++		return;
 +
-+     brcmf_err("NEXMON: %s: %08x %d %d\n", __FUNCTION__, *(int *) frame->nexudphdr.nex, nlmsg_len(nlh), skb->len);
++	/* a complete request, fully inside the received data */
++	if (!nlmsg_ok(nlh, skb->len))
++		return;
++	len = nlmsg_len(nlh);
++	if (len < sizeof(*frame))
++		return;
++	frame = nlmsg_data(nlh);
 +
-+     if (memcmp(frame->nexudphdr.nex, "NEX", 3)) {
-+        brcmf_err("NEXMON: %s: invalid nexudp_ioctl_header\n", __FUNCTION__);
-+        return;
-+    }
++	if (memcmp(frame->nexudphdr.nex, "NEX", 3) ||
++	    frame->nexudphdr.type != NEXUDP_IOCTL)
++		return;
 +
-+     if (frame->nexudphdr.type != NEXUDP_IOCTL) {
-+        brcmf_err("NEXMON: %s: invalid frame type\n", __FUNCTION__);
-+        return;
-+    }
++	paylen = len - sizeof(*frame);
++	if (paylen > BRCMF_DCMD_MAXLEN)
++		return;
 +
-+     if (ifp == NULL) {
-+        brcmf_err("NEXMON: %s: ifp is NULL\n", __FUNCTION__);
-+        return;
-+    }
++	/* "set" is answered with a four byte ACK, "get" with the request plus the data */
++	skb_out = nlmsg_new(frame->set ? 4 : len, GFP_KERNEL);
++	if (!skb_out)
++		return;
++	nlh_tx = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, frame->set ? 4 : len, 0);
++	if (!nlh_tx) {
++		kfree_skb(skb_out);
++		return;
++	}
++	reply = nlmsg_data(nlh_tx);
 +
-+     if (frame->set) {
-+        brcmf_err("NEXMON: %s: calling brcmf_fil_cmd_data_set, cmd: %d\n", __FUNCTION__, frame->cmd);
-+        brcmf_fil_cmd_data_set(ifp, frame->cmd, frame->payload, nlmsg_len(nlh) - sizeof(struct nexudp_ioctl_header) + sizeof(char));
++	mutex_lock(&nexmon_lock);
++	if (!nexmon_ndev) {
++		mutex_unlock(&nexmon_lock);
++		kfree_skb(skb_out);
++		return;
++	}
++	ifp = netdev_priv(nexmon_ndev);
 +
-+        skb_out = nlmsg_new(4, 0);
-+        nlh_tx = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, 4, 0);
-+        NETLINK_CB(skb_out).dst_group = 0; /* not in mcast group */
-+        memcpy(nlmsg_data(nlh_tx), "ACK", 4);
-+        nlmsg_unicast(nl_sock, skb_out, nlh->nlmsg_pid);
-+    } else {
-+        brcmf_err("NEXMON: %s: calling brcmf_fil_cmd_data_get, cmd: %d\n", __FUNCTION__, frame->cmd);
-+        brcmf_fil_cmd_data_get(ifp, frame->cmd, frame->payload, nlmsg_len(nlh) - sizeof(struct nexudp_ioctl_header) + sizeof(char));
++	if (frame->set) {
++		err = brcmf_fil_cmd_data_set(ifp, frame->cmd, frame->payload, paylen);
++		memcpy(reply, "ACK", 4);
++	} else {
++		memcpy(reply, frame, len);
++		err = brcmf_fil_cmd_data_get(ifp, frame->cmd, reply->payload, paylen);
++	}
++	mutex_unlock(&nexmon_lock);
 +
-+         skb_out = nlmsg_new(nlmsg_len(nlh), 0);
-+        nlh_tx = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, nlmsg_len(nlh), 0);
-+        NETLINK_CB(skb_out).dst_group = 0; /* not in mcast group */
-+        memcpy(nlmsg_data(nlh_tx), frame, nlmsg_len(nlh));
-+        nlmsg_unicast(nl_sock, skb_out, nlh->nlmsg_pid);
-+    }
++	if (err)
++		brcmf_dbg(INFO, "NEXMON: ioctl %u (%s) failed: %d\n", frame->cmd,
++			  frame->set ? "set" : "get", err);
 +
-+     brcmf_err("NEXMON: %s: Exit\n", __FUNCTION__);
++	NETLINK_CB(skb_out).dst_group = 0;	/* unicast */
++	nlmsg_unicast(nexmon_nl_sock, skb_out, portid);
 +}
 +
  char *brcmf_ifname(struct brcmf_if *ifp)
  {
  	if (!ifp)
-@@ -652,6 +739,9 @@ int brcmf_net_attach(struct brcmf_if *ifp, bool locked)
- 		  ifp->mac_addr);
- 	ndev = ifp->ndev;
+@@ -677,6 +790,14 @@ int brcmf_net_attach(struct brcmf_if *ifp, bool locked)
+ 	netif_carrier_off(ndev);
  
-+	/* NEXMON */
-+    ndev_global = ndev;
+ 	ndev->priv_destructor = brcmf_cfg80211_free_vif;
 +
- 	/* set appropriate operations */
- 	ndev->netdev_ops = &brcmf_netdev_ops_pri;
++	/* NEXMON: netlink ioctls go to the primary interface (wlan0) only */
++	if (!ifp->bsscfgidx) {
++		mutex_lock(&nexmon_lock);
++		nexmon_ndev = ndev;
++		mutex_unlock(&nexmon_lock);
++	}
++
+ 	brcmf_dbg(INFO, "%s: Broadcom Dongle Host Driver\n", ndev->name);
+ 	return 0;
  
-@@ -716,8 +806,19 @@ static int brcmf_net_mon_open(struct net_device *ndev)
+@@ -688,6 +809,12 @@ fail:
+ 
+ void brcmf_net_detach(struct net_device *ndev, bool locked)
+ {
++	/* NEXMON: no netlink ioctl may reach this interface from here on */
++	mutex_lock(&nexmon_lock);
++	if (nexmon_ndev == ndev)
++		nexmon_ndev = NULL;
++	mutex_unlock(&nexmon_lock);
++
+ 	if (ndev->reg_state == NETREG_REGISTERED) {
+ 		if (locked)
+ 			cfg80211_unregister_netdevice(ndev);
+@@ -716,8 +843,19 @@ static int brcmf_net_mon_open(struct net_device *ndev)
  		bphy_err(drvr, "Monitor mode is already enabled\n");
  		return -EEXIST;
  	}
@@ -399,7 +450,7 @@ index 080c9c9293..dc380a3260 100644
  	err = brcmf_fil_cmd_int_set(ifp, BRCMF_C_SET_MONITOR, monitor);
  	if (err)
  		bphy_err(drvr, "BRCMF_C_SET_MONITOR error (%d)\n", err);
-@@ -742,18 +843,13 @@ static int brcmf_net_mon_stop(struct net_device *ndev)
+@@ -742,18 +880,13 @@ static int brcmf_net_mon_stop(struct net_device *ndev)
  	return err;
  }
  
@@ -422,35 +473,41 @@ index 080c9c9293..dc380a3260 100644
  };
  
  int brcmf_net_mon_attach(struct brcmf_if *ifp)
-@@ -1623,6 +1719,15 @@ int __init brcmf_core_init(void)
+@@ -1623,8 +1756,20 @@ int __init brcmf_core_init(void)
  	err = brcmf_pcie_register();
  	if (err)
  		goto error_pcie_register;
 +
 +	/* NEXMON netlink init */
-+	cfg.input = nexmon_nl_ioctl_handler;
-+	nl_sock = netlink_kernel_create(&init_net, NETLINK_USER, &cfg);
-+	if (!nl_sock) {
-+		brcmf_err("NEXMON: %s: Error creating netlink socket\n", __FUNCTION__);
-+		return -1;
++	nexmon_nl_cfg.input = nexmon_nl_ioctl_handler;
++	nexmon_nl_sock = netlink_kernel_create(&init_net, NETLINK_USER, &nexmon_nl_cfg);
++	if (!nexmon_nl_sock) {
++		brcmf_err("NEXMON: cannot create the netlink socket\n");
++		err = -ENOMEM;
++		goto error_netlink;
 +	}
 +
  	return 0;
  
++error_netlink:
++	brcmf_pcie_exit();
  error_pcie_register:
-@@ -1634,6 +1739,9 @@ int __init brcmf_core_init(void)
+ 	brcmf_usb_exit();
+ error_usb_register:
+@@ -1634,6 +1779,10 @@ error_usb_register:
  
  void __exit brcmf_core_exit(void)
  {
 +	/* NEXMON */
-+    netlink_kernel_release(nl_sock);
++	if (nexmon_nl_sock)
++		netlink_kernel_release(nexmon_nl_sock);
 +
  	brcmf_sdio_exit();
  	brcmf_usb_exit();
  	brcmf_pcie_exit();
 diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/nexmon_ioctls.h b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/nexmon_ioctls.h
 new file mode 100644
-index 0000000000..587b45dfef
+index 0000000..587b45d
 --- /dev/null
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/nexmon_ioctls.h
 @@ -0,0 +1,15 @@
