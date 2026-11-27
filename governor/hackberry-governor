@@ -1,0 +1,123 @@
+#!/bin/bash
+# hackberry-governor: pick the CPU frequency governor from the power state.
+#
+#   hackberry-governor auto     apply the governor the rules below choose
+#   hackberry-governor decide   print the governor "auto" would apply, change nothing
+#   hackberry-governor status   print the governor in use and the inputs to the rules
+#   hackberry-governor watch    run forever, re-applying "auto" on every relevant event
+#                               (event-driven via D-Bus, no polling; used by
+#                               hackberry-governor.service)
+#
+# Rules, first match wins:
+#   session locked                              -> powersave
+#   on battery (UPower OnBattery, else sysfs)   -> powersave
+#   power-profiles-daemon profile is power-saver -> powersave   (Plasma's battery applet)
+#   otherwise                                   -> schedutil
+#
+# The boot default stays whatever cpufreq-tune.service sets (powersave). KDE's AC, Battery
+# and Low battery profiles already move power-profiles-daemon between balanced and
+# power-saver; this tool turns that profile, the lock state and the power source into a
+# governor, because power-profiles-daemon's own driver does nothing on this board.
+# A governor the running kernel does not offer is skipped, never an error.
+
+FAST=schedutil
+SLOW=powersave
+
+available() {
+    local g="$1" p
+    for p in /sys/devices/system/cpu/cpufreq/policy*; do
+        [[ -r "$p/scaling_available_governors" ]] || continue
+        [[ " $(<"$p/scaling_available_governors") " == *" $g "* ]] && return 0
+    done
+    return 1
+}
+
+# "locked" if any login session reports LockedHint=yes. Fails safe to "unlocked".
+lock_state() {
+    local id
+    while read -r id _; do
+        [[ -n "$id" ]] || continue
+        [[ "$(loginctl show-session "$id" -p LockedHint --value 2>/dev/null)" == yes ]] && { echo locked; return; }
+    done < <(loginctl list-sessions --no-legend 2>/dev/null)
+    echo unlocked
+}
+
+# "yes" or "no". UPower first (it is what Plasma uses), then any Mains supply in sysfs.
+# With no battery and no mains information at all, assume mains.
+on_battery() {
+    local v s found=1
+    v=$(busctl --system get-property org.freedesktop.UPower /org/freedesktop/UPower \
+        org.freedesktop.UPower OnBattery 2>/dev/null)
+    case "$v" in
+        "b true")  echo yes; return ;;
+        "b false") echo no;  return ;;
+    esac
+    for s in /sys/class/power_supply/*; do
+        [[ "$(<"$s/type" 2>/dev/null)" == Mains ]] || continue
+        found=0
+        [[ "$(<"$s/online" 2>/dev/null)" == 1 ]] && { echo no; return; }
+    done
+    (( found == 0 )) && echo yes || echo no
+}
+
+# power-profiles-daemon's active profile, empty if it is not running.
+ppd_profile() {
+    local v
+    v=$(busctl --system get-property net.hadess.PowerProfiles /net/hadess/PowerProfiles \
+        net.hadess.PowerProfiles ActiveProfile 2>/dev/null) || return 0
+    v=${v#s \"}; echo "${v%\"}"
+}
+
+decide() {
+    if   [[ "$(lock_state)" == locked ]];  then echo "$SLOW"
+    elif [[ "$(on_battery)" == yes ]];     then echo "$SLOW"
+    elif [[ "$(ppd_profile)" == power-saver ]]; then echo "$SLOW"
+    else echo "$FAST"
+    fi
+}
+
+current() { cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null; }
+
+apply() {
+    local want="$1" p
+    available "$want" || return 0
+    for p in /sys/devices/system/cpu/cpufreq/policy*; do
+        [[ -w "$p/scaling_governor" ]] || continue
+        [[ "$(<"$p/scaling_governor")" == "$want" ]] || echo "$want" >"$p/scaling_governor" 2>/dev/null
+    done
+    return 0
+}
+
+case "${1:-}" in
+    auto)   apply "$(decide)" ;;
+    decide) decide ;;
+    status)
+        echo "governor:   $(current)"
+        echo "would pick: $(decide)"
+        echo "lock:       $(lock_state)"
+        echo "battery:    $(on_battery)"
+        echo "ppd:        $(ppd_profile)"
+        ;;
+    watch)
+        "$0" auto
+        # One monitor, three sources: logind (lock/unlock), UPower (power source) and
+        # power-profiles-daemon (Plasma's profile). Only lines naming a property we use
+        # trigger a re-evaluation, so battery percentage updates are ignored.
+        dbus-monitor --system \
+            "type='signal',sender='org.freedesktop.login1',path_namespace='/org/freedesktop/login1/session'" \
+            "type='signal',sender='org.freedesktop.UPower',interface='org.freedesktop.DBus.Properties'" \
+            "type='signal',sender='net.hadess.PowerProfiles',interface='org.freedesktop.DBus.Properties'" \
+            2>/dev/null |
+        while read -r line; do
+            case "$line" in
+                *LockedHint*|*member=Lock*|*member=Unlock*|*OnBattery*|*ActiveProfile*) "$0" auto ;;
+            esac
+        done
+        # dbus-monitor ended unexpectedly: exit non-zero so systemd restarts us
+        exit 1
+        ;;
+    *)
+        echo "usage: ${0##*/} auto|decide|status|watch" >&2
+        exit 2
+        ;;
+esac

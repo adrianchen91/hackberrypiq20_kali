@@ -70,6 +70,16 @@ section "System tuning (sysctl, journald, WiFi power save)"
 check "journald drop-in present" grep -q 'SystemMaxUse=100M' /etc/systemd/journald.conf.d/99-hackberry.conf
 check "NetworkManager wifi.powersave=3 drop-in present" grep -q 'wifi.powersave = 3' /etc/NetworkManager/conf.d/99-wifi-powersave.conf
 
+section "CPU governor watcher"
+check "hackberry-governor helper installed" test -x /usr/local/sbin/hackberry-governor
+check "hackberry-governor.service enabled" systemctl is-enabled hackberry-governor.service
+check "hackberry-governor.service active" systemctl is-active hackberry-governor.service
+if [[ -x /usr/local/sbin/hackberry-governor ]]; then
+    gov_now="$(</sys/devices/system/cpu/cpufreq/policy0/scaling_governor)"
+    gov_want="$(/usr/local/sbin/hackberry-governor decide)"
+    [[ "$gov_now" == "$gov_want" ]] && ok "governor is $gov_now (matches the power state)" || warn "governor is $gov_now but the power state calls for $gov_want"
+fi
+
 section "Touchscreen sleep hook"
 check "hackberry-touch helper installed" test -x /usr/local/sbin/hackberry-touch
 check "systemd-sleep hook installed" test -x /usr/lib/systemd/system-sleep/hackberry-touch

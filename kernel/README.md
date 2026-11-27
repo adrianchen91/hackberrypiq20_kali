@@ -50,6 +50,7 @@ line in `hackberry.config` does not survive `olddefconfig`.
 sudo ./kernel/install.sh                # install and stage only
 sudo ./kernel/install.sh --enable       # also set os_prefix in config.txt
 sudo ./kernel/install.sh --disable      # rollback to the stock kernel
+sudo ./kernel/install.sh --allow-suspend # remove the suspend block (default: suspend is blocked, see below)
 ```
 
 How it stays safe:
@@ -107,16 +108,51 @@ How it stays safe:
 
 ## Known not working
 
-- **Suspend (7.3.6, rpi-7.3.y 99dc5c58).** On the stock tip every suspend aborted in
-  `brcmstb_gpio_suspend_noirq` (`error -16`) because GIO_AON has no parent IRQ;
-  `patches/0002` fixes that. With it, `test-suspend.sh` passes the `freezer` and `devices`
-  pm_test levels but the machine hangs at `platform` (2 runs, one with `--debug`) and needs
-  a power cycle. The journal loses its last minutes on a power cut, so no kernel output
-  survived; the cause is unknown, probably in the noirq or platform phase. Finding it needs
-  the debug UART (`ttyAMA10`, 115200, already the kernel console) and a USB-serial adapter.
-  Suspend is not usable; do not run `test-suspend.sh --real`.
-- Idle draw without suspend: about 2.15 W with the screen off, 2.6 W with it on (SoC
-  rails, `vcgencmd pmic_read_adc`). The CM5 exposes no CPU idle states.
+- **Suspend to RAM (7.3.6, rpi-7.3.y 99dc5c58): the firmware does not resume into the
+  kernel.** Found with `pstore.sh` (log kept in RAM across the reset) and
+  `suspend-bisect.sh` on a `build.sh --debug-patches` kernel (patch 0004 restarts the
+  machine right before the Nth suspend or resume callback):
+  - Stock tip: every suspend aborts in `brcmstb_gpio_suspend_noirq` (`error -16`, GIO_AON
+    has no parent IRQ); `patches/0002` fixes that.
+  - `bcm2712_iommu_suspend` writes a register on IOMMU4 (HVS) that hangs the machine;
+    `patches/0003` removes the write.
+  - The `pm_test` `platform` level then suspends fully and hangs on resume, in
+    `bcm2835_mbox_resume_noirq` (`107c013880.mailbox`, one `writel` to `MAIL0_CNF`) right after
+    the `soc` bus resumes. Skipping that write (test only, `debug-patches/0005`) lets all
+    five pm_test levels finish. Do not ship it: on a real power-down the register is reset
+    and the firmware mailbox stops answering without the write.
+  - CPU hotplug is broken on this board: `echo 0 > cpuN/online` works, `echo 1` fails with
+    `CPU3: failed to come online` / `failed in unknown state : 0x0` and `Input/output
+    error`, on both 6.18 and 7.3. Suspend takes the non-boot CPUs offline, so on four cores
+    the `processors` level leaves the machine on one core and `rtcwake` fails with a write
+    error. `test-suspend.sh` now fails a level when the online CPU list changes.
+  - Booted with `maxcpus=1`, a real suspend runs every callback and the syscore steps and
+    ends at `Calling cpu_pm_suspend` in the pstore log. The final PSCI `SYSTEM_SUSPEND` call
+    never returns; the board powers down and 19 s later cold-boots, about when the RTC alarm
+    was set for. So the firmware treats suspend as a power-off with a timed wake, not as a
+    state-retaining suspend. This is inferred from the pstore log and the cold boot; it was
+    not confirmed from the firmware side.
+  Do not run `test-suspend.sh --real`: it powers the board off.
+  **It also happens on its own.** 7.3 offers `mem` in `/sys/power/state` (6.12 and 6.18 do
+  not), so `logind` reports `CanSuspend=yes` and KDE PowerDevil suspends the idle desktop:
+  on 2026-11-26 the log ends at `systemd-sleep: Performing sleep operation 'suspend'` at
+  11:05:35, about 15 minutes after the last activity, and the device had to be power cycled.
+  Those "hangs" were most likely this power-off with no wake source.
+  `install.sh` therefore writes `/etc/systemd/sleep.conf.d/hackberry-no-suspend.conf`
+  (`AllowSuspend=no` and the hibernate variants), after which `busctl call
+  org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager CanSuspend`
+  prints `s "no"`. Pass `--allow-suspend` to `install.sh` only if a firmware that resumes
+  appears.
+- Idle draw without suspend (7.3.6, summed SoC rails from `vcgencmd pmic_read_adc`, 12 s
+  means, idle desktop, Wi-Fi associated): 2.73 W with the screen on and the backlight lit;
+  about 2.2 W with the panel signal off (`kscreen-doctor --dpms off`) and the backlight
+  still lit; 1.81 W with the backlight also off. The backlight is a physical button on the
+  board, so software cannot turn off that last 0.4 W. Seen on rail `3V3_SYS`
+  (770 -> 590 -> 210 mW). The CM5 exposes no CPU idle states.
+- Software power levers measured while the screen was on, none outside the noise of about
+  0.07 W: Wi-Fi power save off (already on), USB keyboard autosuspend, unloading
+  `hci_uart`. The CPU is already at its 700 MHz minimum under the `powersave` governor, so a
+  frequency cap on lock would change nothing.
 
 ## Lean profile (`build.sh --lean`)
 

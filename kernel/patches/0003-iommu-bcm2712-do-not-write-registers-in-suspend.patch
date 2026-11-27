@@ -1,0 +1,33 @@
+From: hackberrypiq20_kali
+Subject: iommu/bcm2712: do not write registers in the suspend callback
+
+On the CM5 the late-suspend callback bcm2712_iommu_suspend() hangs the machine at
+the MMU_WR() that disables the MMU, for IOMMU4 (the HVS one, 1000005200): the write
+never completes and the CPU stalls on the bus. Seen with a console photo on rpi-7.3.y
+99dc5c58, `test-suspend.sh --debug --level platform`: the last line is
+"bcm2712-iommu 1000005200.iommu: PM: calling bcm2712_iommu_suspend" with no "returned".
+bcm2712_iommu_resume() reprograms the whole block through bcm2712_iommu_hw_init(), so
+the callback now leaves the registers alone. Experimental: suspend may still hang later.
+
+---
+diff --git a/drivers/iommu/bcm2712-iommu.c b/drivers/iommu/bcm2712-iommu.c
+index 4f1e08c46c..94d191c7c3 100644
+--- a/drivers/iommu/bcm2712-iommu.c
++++ b/drivers/iommu/bcm2712-iommu.c
+@@ -764,10 +764,12 @@ static void bcm2712_iommu_remove(struct platform_device *pdev)
+ 
+ static int bcm2712_iommu_suspend(struct device *dev)
+ {
+-	struct bcm2712_iommu *mmu = dev_get_drvdata(dev);
+-
+-	MMU_WR(MMMU_CTRL_OFFSET, 0); /* disable the MMU */
+-
++	/*
++	 * Do not touch the registers here. On the CM5 the write that used to disable the
++	 * MMU never completes for IOMMU4 (the HVS one, 1000005200): the CPU stalls on the
++	 * bus during the late suspend phase and the machine hangs. Resume reprograms the
++	 * whole block in bcm2712_iommu_hw_init(), so nothing is lost by leaving it alone.
++	 */
+ 	return 0;
+ }
+ 

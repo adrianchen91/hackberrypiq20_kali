@@ -1,0 +1,142 @@
+From: hackberrypiq20_kali
+Subject: DEBUG: pm_restart_after warm-resets the machine before the Nth PM event
+
+Debug aid for the CM5 suspend hang, not for release builds (build.sh --debug-patches).
+Every PM callback run through dpm_run_callback() and a few stage points in
+suspend_enter() count as an event from dpm_suspend_start() on. Writing N to
+/sys/module/kernel/parameters/pm_restart_after makes the kernel print which event N is
+and emergency_restart() right before it. The warm reset keeps RAM, so pstore holds the
+log; if the machine hangs earlier it never resets. Binary-searching N finds the event
+that hangs. Use with pm_async=0 so the order is stable (test-suspend.sh --debug does).
+
+---
+diff --git a/drivers/base/power/main.c b/drivers/base/power/main.c
+index e130da4281..d94f3f1360 100644
+--- a/drivers/base/power/main.c
++++ b/drivers/base/power/main.c
+@@ -37,6 +37,7 @@
+ #include <linux/thermal.h>
+ #include <linux/timer.h>
+ #include <linux/nmi.h>
++#include <linux/reboot.h>
+ 
+ #include "../base.h"
+ #include "power.h"
+@@ -497,6 +498,40 @@ static void dpm_show_time(ktime_t starttime, pm_message_t state, int error,
+ 		  usecs / USEC_PER_MSEC, usecs % USEC_PER_MSEC);
+ }
+ 
++/*
++ * HACKBERRY DEBUG (kernel/debug-patches): find where a suspend hangs. Every PM callback
++ * and a few stage points count as an event while suspending. Writing N to
++ * /sys/module/kernel/parameters/pm_restart_after warm-resets the machine right before
++ * event N, with its name on the console (pstore keeps it across the warm reset). The
++ * highest N that still resets is the event that hangs. 0 = off.
++ */
++static int pm_restart_after;
++core_param(pm_restart_after, pm_restart_after, int, 0644);
++static atomic_t pm_bisect_count = ATOMIC_INIT(0);
++
++static void pm_bisect_event(const char *what, struct device *dev, void *cb)
++{
++	int n;
++
++	if (!pm_restart_after)
++		return;
++	n = atomic_inc_return(&pm_bisect_count);
++	if (dev)
++		pr_info("pm-bisect: event %d %s %ps\n", n, dev_name(dev), cb);
++	else
++		pr_info("pm-bisect: event %d %s\n", n, what);
++	if (n == pm_restart_after) {
++		pr_emerg("pm-bisect: restarting before event %d: %s %s\n", n,
++			 dev ? dev_name(dev) : what, dev ? "" : "(stage)");
++		emergency_restart();
++	}
++}
++
++void pm_bisect_point(const char *what)
++{
++	pm_bisect_event(what, NULL, NULL);
++}
++
+ static int dpm_run_callback(pm_callback_t cb, struct device *dev,
+ 			    pm_message_t state, const char *info)
+ {
+@@ -506,6 +541,8 @@ static int dpm_run_callback(pm_callback_t cb, struct device *dev,
+ 	if (!cb)
+ 		return 0;
+ 
++	pm_bisect_event(NULL, dev, cb);
++
+ 	calltime = initcall_debug_start(dev, cb);
+ 
+ 	pm_dev_dbg(dev, state, info);
+@@ -2351,6 +2388,7 @@ int dpm_suspend_start(pm_message_t state)
+ 	ktime_t starttime = ktime_get();
+ 	int error;
+ 
++	atomic_set(&pm_bisect_count, 0);
+ 	error = dpm_prepare(state);
+ 	if (error)
+ 		dpm_save_failed_step(SUSPEND_PREPARE);
+diff --git a/include/linux/pm.h b/include/linux/pm.h
+index afcaaa37a8..174bf4a854 100644
+--- a/include/linux/pm.h
++++ b/include/linux/pm.h
+@@ -824,6 +824,7 @@ extern void dpm_complete(pm_message_t state);
+ extern void device_pm_unlock(void);
+ extern int dpm_suspend_end(pm_message_t state);
+ extern int dpm_suspend_start(pm_message_t state);
++extern void pm_bisect_point(const char *what);
+ extern int dpm_suspend_noirq(pm_message_t state);
+ extern int dpm_suspend_late(pm_message_t state);
+ extern int dpm_suspend(pm_message_t state);
+@@ -866,6 +867,8 @@ extern bool dev_pm_skip_suspend(struct device *dev);
+ #define device_pm_lock() do {} while (0)
+ #define device_pm_unlock() do {} while (0)
+ 
++static inline void pm_bisect_point(const char *what) {}
++
+ static inline int dpm_suspend_start(pm_message_t state)
+ {
+ 	return 0;
+diff --git a/kernel/power/suspend.c b/kernel/power/suspend.c
+index 29cdf5aa5a..1b27186173 100644
+--- a/kernel/power/suspend.c
++++ b/kernel/power/suspend.c
+@@ -480,18 +480,22 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
+ 		pr_err("late suspend of devices failed\n");
+ 		goto Platform_finish;
+ 	}
++	pm_bisect_point("dpm_suspend_late done");
+ 	error = platform_suspend_prepare_late(state);
+ 	if (error)
+ 		goto Devices_early_resume;
++	pm_bisect_point("platform_suspend_prepare_late done");
+ 
+ 	error = dpm_suspend_noirq(PMSG_SUSPEND);
+ 	if (error) {
+ 		pr_err("noirq suspend of devices failed\n");
+ 		goto Platform_early_resume;
+ 	}
++	pm_bisect_point("dpm_suspend_noirq done");
+ 	error = platform_suspend_prepare_noirq(state);
+ 	if (error)
+ 		goto Platform_wake;
++	pm_bisect_point("platform_suspend_prepare_noirq done");
+ 
+ 	if (suspend_test(TEST_PLATFORM))
+ 		goto Platform_wake;
+@@ -534,8 +538,11 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
+ 	pm_sleep_enable_secondary_cpus();
+ 
+  Platform_wake:
++	pm_bisect_point("platform wake (after the test delay)");
+ 	platform_resume_noirq(state);
++	pm_bisect_point("platform_resume_noirq done");
+ 	dpm_resume_noirq(PMSG_RESUME);
++	pm_bisect_point("dpm_resume_noirq done");
+ 
+  Platform_early_resume:
+ 	platform_resume_early(state);

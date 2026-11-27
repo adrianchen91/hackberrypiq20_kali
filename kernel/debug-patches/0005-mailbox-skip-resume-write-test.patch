@@ -1,0 +1,14 @@
+diff --git a/drivers/mailbox/bcm2835-mailbox.c b/drivers/mailbox/bcm2835-mailbox.c
+index 1c3d391d56..db20c0443a 100644
+--- a/drivers/mailbox/bcm2835-mailbox.c
++++ b/drivers/mailbox/bcm2835-mailbox.c
+@@ -188,7 +188,8 @@ static int bcm2835_mbox_resume_noirq(struct device *dev)
+ 	 * the replies are never signalled and every firmware transaction times
+ 	 * out.
+ 	 */
+-	writel(ARM_MC_IHAVEDATAIRQEN, mbox->regs + MAIL0_CNF);
++	/* DEBUG BISECT TEST: write skipped to see whether this register access hangs */
++	(void)mbox;
+ 
+ 	return 0;
+ }
